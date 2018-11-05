@@ -10,6 +10,7 @@ import logging as log
 import itertools
 
 import torch
+import torch.nn as nn
 import torch.autograd as autograd
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.nn.utils.clip_grad import clip_grad_norm_
@@ -60,7 +61,7 @@ def build_trainer_params(args, task_names):
     return Params(params)
 
 
-def build_trainer(params, model, run_dir, metric_should_decrease=True):
+def build_trainer(params, model, model_copy, run_dir, metric_should_decrease=True):
     '''Build a trainer from params.
 
     Parameters
@@ -114,12 +115,12 @@ def build_trainer(params, model, run_dir, metric_should_decrease=True):
                            'max_sim_grad_norm': params['max_sim_grad_norm'],
                            'slow_params_approx': params['slow_params_approx'],
                            'only_pos_reg': params['only_pos_reg'], 'cos_sim_approx': params['cos_sim_approx']})
-    trainer = MetaMultiTaskTrainer.from_params(model, run_dir,
+    trainer = MetaMultiTaskTrainer.from_params(model, model_copy, run_dir,
                                                copy.deepcopy(train_params))
     return trainer, train_params, opt_params, schd_params
 
 
-def simulate_sgd(model, params, task, batch, fwd_func=None, sim_lr=0.01):
+def simulate_sgd(model, params, task, batch, sim_lr=0.01):
     ''' Given original parameters and a batch of inputs and outputs,
     compute the model's loss evaluated on the given inputs and parameters.
     Then compute the gradient of the loss and update the original params.
@@ -133,15 +134,23 @@ def simulate_sgd(model, params, task, batch, fwd_func=None, sim_lr=0.01):
         - cand_params (List[torch.Tensor]): list of candidate parameter values
         - sim_loss (float?): loss of the model with orig params and the given input on the output
     '''
-    sim_out = model(task, batch, fwd_func=fwd_func, params=params)
+    sim_out = model(task, batch)
     sim_loss = sim_out['loss']
     grad_orig_params = autograd.grad(sim_loss, params, create_graph=True, allow_unused=True)
     cand_params = [p + (-sim_lr * g) if g is not None else p for g, p in zip(grad_orig_params, params)]
     return cand_params, sim_out
 
+def set_model_params(model, params):
+    ''' Set model's parameters to params.
+    Assume that params is the required sizes and shapes for model. '''
+    for (name, old_p), new_p in zip(model.named_parameters(), params):
+        #old_p = nn.Parameter(new_p) # should clone somehow
+        old_p.data = new_p
+        #setattr(model, name, nn.Parameter(new_p))
+
 
 class MetaMultiTaskTrainer():
-    def __init__(self, model, patience=2, val_interval=100, max_vals=50,
+    def __init__(self, model, model_copy, patience=2, val_interval=100, max_vals=50,
                  serialization_dir=None, cuda_device=-1,
                  max_grad_norm=None, lr_decay=None, min_lr=None,
                  keep_all_checkpoints=False, val_data_limit=5000,
@@ -190,9 +199,7 @@ class MetaMultiTaskTrainer():
             of examples. Hashing is used to ensure that the same examples are loaded each epoch.
         """
         self._model = model
-        fwd_func_train, fwd_func_eval = utils.prepare_fforward(model)
-        self._fwd_func_train = fwd_func_train
-        self._fwd_func_eval = fwd_func_eval
+        self._model_copy = model_copy
 
         self._patience = patience
         self._max_vals = max_vals
@@ -470,16 +477,20 @@ class MetaMultiTaskTrainer():
         #self._model.snli5k_mdl.classifier.classifier[4].register_forward_hook(template_print_norm_hook("mlp lin2 fwd"))
 
         sample_weights = self._setup_task_weighting(weighting_method, tasks)
+
         share = 1
         only_pos_reg = self._only_pos_reg
         max_sim_grad_norm = self._max_sim_grad_norm
         cos_sim_approx = self._cos_sim_approx
-        if share: # only optimize shared params
-            #shared_params = [p for n, p in self._model.sent_encoder.named_parameters() if p.requires_grad and
-            #        not ('_phrase_layer' in n and 'embed' in n)]
-            _shared_params = [copy.deepcopy(p) for n, p in self._model.named_parameters()]
-        else:
-            params = [p for p in self._model.parameters() if p.requires_grad]
+        #if share: # only optimize shared params
+        #    #shared_params = [p for n, p in self._model.sent_encoder.named_parameters() if p.requires_grad and
+        #    #        not ('_phrase_layer' in n and 'embed' in n)]
+        #    _shared_params = [copy.deepcopy(p) for n, p in self._model.named_parameters()]
+        #    sent_enc_params = dict([("sent_encoder.%s" % n, 0) for n, p in self._model.sent_encoder.named_parameters()])
+        #else:
+        #    params = [p for p in self._model.parameters() if p.requires_grad]
+        model = self._model
+        mdl_cpy = self._model_copy
 
         # Sample the tasks to train on. Do it all at once (val_interval) for MAX EFFICIENCY.
         #samples_src = random.choices(tasks, weights=sample_weights, k=validation_interval)
@@ -514,14 +525,14 @@ class MetaMultiTaskTrainer():
                 if share: # only optimize shared params
                     #shared_params = [p for n, p in self._model.sent_encoder.named_parameters() if p.requires_grad and
                     #        not ('_phrase_layer' in n and 'embed' in n)]
-                    sent_enc_params = dict([("sent_encoder.%s" % n, 0) for n, p in self._model.sent_encoder.named_parameters()])
                     shared_params = []
-                    for jj, (n, p) in  enumerate(self._model.named_parameters()):
-                        _shared_params[jj].data = p.data.clone()
-                        _shared_params[jj].grad = 0. * _shared_params[jj].grad if _shared_params[jj].grad is not None else None
-                        if n in sent_enc_params:
-                            if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n):
-                                shared_params.append(_shared_params[jj])
+                    #for jj, (n, p) in enumerate(self._model.named_parameters()):
+                    #    _shared_params[jj].data = p.data.clone()
+                    #    _shared_params[jj].grad = 0. * _shared_params[jj].grad if _shared_params[jj].grad is not None else None
+                    #    if n in sent_enc_params:
+                    #        if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n):
+                    #            shared_params.append(_shared_params[jj])
+                    pass
                 else:
                     params = [p for p in self._model.parameters() if p.requires_grad]
                 if slow_params_approx: # assume cand_params ~= params
@@ -590,26 +601,26 @@ class MetaMultiTaskTrainer():
                         params = [p for p in self._model.parameters() if p.requires_grad]
 
                 else:
-                    src_param_clones = utils.clone_parameters(self._model, require_grad=True)
-                    src_cand_params, sim_out = simulate_sgd(self._model, src_param_clones,
-                                                            src_task, src_batch,
-                                                            fwd_func=self._fwd_func_train,
-                                                            sim_lr=sim_lr)
-                    trg_out = self._model(trg_task, trg_batch, params=src_cand_params,
-                                          fwd_func=self._fwd_func_train)
+                    src_param_clones = utils.clone_parameters(model, require_grad=True)
+                    src_cand_params, sim_out = simulate_sgd(model, src_param_clones, src_task, src_batch, sim_lr=sim_lr)
+                    set_model_params(mdl_cpy, src_cand_params)
+                    trg_out = mdl_cpy(trg_task, trg_batch)
+                    trg_out['loss'].backward()
+                    trg_grads_src = autograd.grad(src_cand_params, model.parameters(), grad_outputs=[w.grad for w in mdl_cpy.parameters()])
+                    for p, g in zip(model.parameters(), trg_grads_src):
+                        p.grad = g
                     trg_task_info['loss'] += trg_out['loss'].item()
 
-                    trg_param_clones = utils.clone_parameters(self._model, require_grad=True)
-                    trg_cand_params, sim_out = simulate_sgd(self._model, trg_param_clones,
-                                                            trg_task, trg_batch,
-                                                            fwd_func=self._fwd_func_train,
-                                                            sim_lr=sim_lr)
-                    src_out = self._model(src_task, src_batch, params=trg_cand_params,
-                                          fwd_func=self._fwd_func_train)
+                    trg_param_clones = utils.clone_parameters(model, require_grad=True)
+                    trg_cand_params, sim_out = simulate_sgd(model, trg_param_clones, trg_task, trg_batch, sim_lr=sim_lr)
+                    src_out = mdl_cpy(src_task, src_batch)
+                    src_out['loss'].backward()
+                    src_grads_trg = autograd.grad(trg_cand_params, model.parameters(), grad_outputs=[w.grad for w in mdl_cpy.parameters()])
+                    for p, g in zip(model.parameters(), src_grads_trg):
+                        p.grad += g # TODO(Alex): is this right???
                     src_task_info['loss'] += src_out['loss'].item()
-                    loss = trg_out['loss'] + src_out['loss']
 
-                    loss.backward()
+                    loss = trg_out['loss'] + src_out['loss']
 
                 #sentenc11 = self._model.sent_encoder(src_batch['input1'], src_task)[0]
                 #sentenc12 = self._model.sent_encoder(src_batch['input2'], src_task)[0]
@@ -624,7 +635,6 @@ class MetaMultiTaskTrainer():
                 grads = [p.grad for p in shared_params]
                 if sum([torch.isnan(grad).any().item() for grad in grads]):
                     ipdb.set_trace()
-
                 assert_for_log(not torch.isnan(loss).any(), "NaNs in loss.")
 
                 # Ignore loss scaling for now
@@ -1160,7 +1170,7 @@ class MetaMultiTaskTrainer():
             self._tb_writers[split].add_scalar(name, metric_val, step)
 
     @classmethod
-    def from_params(cls, model, serialization_dir, params):
+    def from_params(cls, model, model_copy, serialization_dir, params):
         ''' Generator trainer from parameters.  '''
 
         patience = params.pop("patience", 2)
@@ -1181,7 +1191,7 @@ class MetaMultiTaskTrainer():
         cos_sim_approx = params.pop("cos_sim_approx", 0)
 
         params.assert_empty(cls.__name__)
-        return MetaMultiTaskTrainer(model, patience=patience,
+        return MetaMultiTaskTrainer(model, model_copy, patience=patience,
                                     val_interval=val_interval, max_vals=max_vals,
                                     serialization_dir=serialization_dir,
                                     cuda_device=cuda_device, max_grad_norm=max_grad_norm,

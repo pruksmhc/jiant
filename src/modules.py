@@ -78,7 +78,7 @@ class SentenceEncoder(Model):
         else:
             self._text_field_embedder = text_field_embedder
             d_emb = text_field_embedder.get_output_dim()
-            self._highway_layer = TimeDistributed(Highway(d_emb, num_highway_layers))
+            self._highway_layer = TimeDistributed(Highway(d_emb, num_highway_layers)) if num_highway_layers > 0 else lambda x:x
 
         self._phrase_layer = phrase_layer
         self._cove_layer = cove_layer
@@ -111,7 +111,8 @@ class SentenceEncoder(Model):
             - sent_mask (torch.FloatTensor): (b_size, seq_len, d_emb); all 0/1s
         """
         if reset:
-            self.reset_states()
+            #self.reset_states()
+            pass
 
         # Embeddings
         # Note: These highway modules are actually identity functions by default.

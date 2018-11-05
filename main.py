@@ -157,6 +157,7 @@ def main(cl_arguments):
     start_time = time.time()
     build_model = mmodels.build_model if args.metatrain else models.build_model
     model = build_model(args, vocab, word_embs, tasks)
+    model_copy = build_model(args, vocab, word_embs, tasks)
     log.info('\tFinished building model in %.3fs', time.time() - start_time)
 
     # Check that necessary parameters are set for each step. Exit with error if not.
@@ -208,9 +209,11 @@ def main(cl_arguments):
         params = build_trainer_params(args, task_names=[])
         stop_metric = train_tasks[0].val_metric if len(train_tasks) == 1 else 'macro_avg'
         should_decrease = train_tasks[0].val_metric_decreases if len(train_tasks) == 1 else False
-        trainer, _, opt_params, schd_params = build_trainer(params, model,
-                                                            args.run_dir,
-                                                            should_decrease)
+        if args.metatrain:
+            trainer, _, opt_params, schd_params = build_trainer(params, model, model_copy,
+                                                                args.run_dir, should_decrease)
+        else:
+            trainer, _, opt_params, schd_params = build_trainer(params, model, args.run_dir, should_decrease)
         to_train = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
         best_epochs = trainer.train(train_tasks, stop_metric,
                                     args.batch_size, args.bpp_base,
