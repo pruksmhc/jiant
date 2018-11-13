@@ -222,8 +222,8 @@ class MetaMultiTaskTrainer():
         self._task_infos = None
         self._metric_infos = None
 
-        self._log_interval = .1  # seconds
-        self._summary_interval = .1  # num batches between log to tensorboard
+        self._log_interval = 10  # seconds
+        self._summary_interval = 10  # num batches between log to tensorboard
         if self._cuda_device >= 0:
             self._model = self._model.cuda(self._cuda_device)
 
@@ -415,7 +415,6 @@ class MetaMultiTaskTrainer():
         -------
         Validation results
         """
-        #validation_interval = int(self._val_interval / 2) # each update, we're actually doing two updates
         validation_interval = self._val_interval
         assert_for_log(validation_interval % 2 == 0, "Need an even validation interval!")
         sim_lr, slow_params_approx = self._sim_lr, self._slow_params_approx
@@ -446,35 +445,6 @@ class MetaMultiTaskTrainer():
                                "Use load_model = 1 to load the checkpoints instead. "
                                "If you don't want them, delete them or change your experiment name." %
                                self._serialization_dir)
-
-        #self._model.sent_encoder._phrase_layer.fc2.register_backward_hook(stop_on_nan_hook)
-        #self._model.sent_encoder._phrase_layer.fc2.register_backward_hook(template_print_norm_hook("fc2 backward"))
-        #self._model.sent_encoder._phrase_layer.fc2.register_forward_hook(template_print_norm_hook("fc2 forward"))
-
-        ## dot product matrix attention
-        #self._model.snli5k_mdl.attn._matrix_attention.register_backward_hook(stop_on_nan_hook)
-        #self._model.snli5k_mdl.attn._matrix_attention.register_backward_hook(template_print_norm_hook("mat attn backward"))
-        #self._model.snli5k_mdl.attn._matrix_attention.register_forward_hook(template_print_norm_hook("mat attn forward"))
-
-        ## post attn LSTM
-        #self._model.snli5k_mdl.attn._modeling_layer._module.register_backward_hook(template_print_norm_hook("lstm attn backward"))
-        #self._model.snli5k_mdl.attn._modeling_layer._module.register_forward_hook(template_print_norm_hook("lstm attn fwd"))
-
-        ## projection + max pooling
-        #self._model.snli5k_mdl.pooler.register_backward_hook(template_print_norm_hook("pooler backward"))
-        #self._model.snli5k_mdl.pooler.register_forward_hook(template_print_norm_hook("pooler forward"))
-
-        ## MLP: input -> hidden
-        #self._model.snli5k_mdl.classifier.classifier[0].register_backward_hook(template_print_norm_hook("mlp lin1 bwd"))
-        #self._model.snli5k_mdl.classifier.classifier[0].register_forward_hook(template_print_norm_hook("mlp lin1 fwd"))
-
-        ## layer norm
-        #self._model.snli5k_mdl.classifier.classifier[2].register_backward_hook(template_print_norm_hook("mlp LN bwd"))
-        #self._model.snli5k_mdl.classifier.classifier[2].register_forward_hook(template_print_norm_hook("mlp LN fwd"))
-
-        ## MLP: hidden -> output
-        #self._model.snli5k_mdl.classifier.classifier[4].register_backward_hook(template_print_norm_hook("mlp lin2 bwd"))
-        #self._model.snli5k_mdl.classifier.classifier[4].register_forward_hook(template_print_norm_hook("mlp lin2 fwd"))
 
         sample_weights = self._setup_task_weighting(weighting_method, tasks)
 
@@ -601,35 +571,51 @@ class MetaMultiTaskTrainer():
                         params = [p for p in self._model.parameters() if p.requires_grad]
 
                 else:
+                    org_params = [p for p in model.parameters()]
+
                     src_param_clones = utils.clone_parameters(model, require_grad=True)
-                    src_cand_params, sim_out = simulate_sgd(model, src_param_clones, src_task, src_batch, sim_lr=sim_lr)
-                    set_model_params(mdl_cpy, src_cand_params)
+                    src_param_cands, _ = simulate_sgd(model, src_param_clones, src_task, src_batch, sim_lr=sim_lr)
+                    filtered_orig_params = [(i, p) for i, p in enumerate(src_param_clones) if org_params[i].requires_grad]
+
+                    set_model_params(mdl_cpy, src_param_cands)
                     trg_out = mdl_cpy(trg_task, trg_batch)
                     trg_out['loss'].backward()
-                    trg_grads_src = autograd.grad(src_cand_params, model.parameters(), grad_outputs=[w.grad for w in mdl_cpy.parameters()])
-                    for p, g in zip(model.parameters(), trg_grads_src):
-                        p.grad = g
-                    trg_task_info['loss'] += trg_out['loss'].item()
+
+                    cpy_grads = [w.grad for w in mdl_cpy.parameters()]
+                    filtered_src_param_cands = [p for i, p in enumerate(src_param_cands) if cpy_grads[i] is not None]
+                    filtered_cpy_grads = [g for i, g in enumerate(cpy_grads) if g is not None]
+                    trg_grads_src = autograd.grad(filtered_src_param_cands, [p for _, p in filtered_orig_params],
+                                                  grad_outputs=filtered_cpy_grads, allow_unused=True)
 
                     trg_param_clones = utils.clone_parameters(model, require_grad=True)
-                    trg_cand_params, sim_out = simulate_sgd(model, trg_param_clones, trg_task, trg_batch, sim_lr=sim_lr)
-                    src_out = mdl_cpy(src_task, src_batch)
-                    src_out['loss'].backward()
-                    src_grads_trg = autograd.grad(trg_cand_params, model.parameters(), grad_outputs=[w.grad for w in mdl_cpy.parameters()])
-                    for p, g in zip(model.parameters(), src_grads_trg):
-                        p.grad += g # TODO(Alex): is this right???
-                    src_task_info['loss'] += src_out['loss'].item()
+                    trg_param_cands, _ = simulate_sgd(model, trg_param_clones, trg_task, trg_batch, sim_lr=sim_lr)
 
+                    set_model_params(mdl_cpy, trg_param_cands)
+                    src_out = mdl_cpy(trg_task, src_batch)
+                    src_out['loss'].backward()
+
+                    cpy_grads = [w.grad for w in mdl_cpy.parameters()]
+                    filtered_trg_param_cands = [p for i, p in enumerate(trg_param_cands) if cpy_grads[i] is not None]
+                    filtered_cpy_grads = [g for i, g in enumerate(cpy_grads) if g is not None]
+                    src_grads_trg = autograd.grad(filtered_trg_param_cands, [p for _, p in filtered_orig_params],
+                                                  grad_outputs=filtered_cpy_grads, allow_unused=True)
+
+                    for i, (j, _) in enumerate(filtered_orig_params):
+                        if trg_grads_src[i] is not None:
+                            if org_params[j].grad is None:
+                                org_params[j].grad = trg_grads_src[i]
+                            else:
+                                org_params[j].grad += trg_grads_src[i]
+                        if src_grads_trg[i] is not None:
+                            if org_params[j].grad is None:
+                                org_params[j].grad += src_grads_trg[i]
+                            else:
+                                org_params[j].grad += src_grads_trg[i]
+
+                    trg_task_info['loss'] += trg_out['loss'].item()
+                    src_task_info['loss'] += src_out['loss'].item()
                     loss = trg_out['loss'] + src_out['loss']
 
-                #sentenc11 = self._model.sent_encoder(src_batch['input1'], src_task)[0]
-                #sentenc12 = self._model.sent_encoder(src_batch['input2'], src_task)[0]
-                #sentenc21 = self._model.sent_encoder(trg_batch['input1'], trg_task)[0]
-                #sentenc22 = self._model.sent_encoder(trg_batch['input2'], trg_task)[0]
-                #log.info("SRC S1 NORM: %.3f", sentenc11.norm())
-                #log.info("SRC S2 NORM: %.3f", sentenc12.norm())
-                #log.info("TRG S1 NORM: %.3f", sentenc21.norm())
-                #log.info("TRG S2 NORM: %.3f", sentenc22.norm())
                 if torch.isnan(loss).any():
                     ipdb.set_trace()
                 grads = [p.grad for p in shared_params]

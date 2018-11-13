@@ -2,7 +2,6 @@ import ipdb
 import torch
 from torch import nn
 from torch.nn import functional as F
-from .allennlp_mods.elmo_text_field_embedder import ElmoTextFieldEmbedder, ElmoTokenEmbedderWrapper
 
 class Scope(object):
     pass
@@ -11,7 +10,7 @@ import sys
 from collections import OrderedDict
 
 PY2 = sys.version_info[0] == 2
-_internal_attrs = {'_backend', '_parameters', '_buffers', '_backward_hooks', '_forward_hooks', '_forward_pre_hooks', '_modules', 'forward'}
+_internal_attrs = {'_backend', '_parameters', '_buffers', '_backward_hooks', '_forward_hooks', '_forward_pre_hooks', '_modules'}
 
 
 class Scope(object):
@@ -37,58 +36,25 @@ def _make_functional(module, params_box, params_offset, trg_func='forward', pare
         for name, attr in module.__dict__.items():
             if name in _internal_attrs:
                 continue
-            if isinstance(attr, ElmoTextFieldEmbedder):
-                ipdb.set_trace()
             setattr(self, name, attr)
 
         child_params_offset = params_offset + num_params
-
-        # copy class attributes (?) and methods
-        module_cls = type(module)
-        for name, attr in module_cls.__dict__.items():
-            if name.startswith("__") or name in _internal_attrs: # NOTE: 'forward' added to _internal_attrs
-                continue
-            if callable(attr):
-                _, func_ffunc, _ = _make_functional(module, params_box, child_params_offset, name, self)
-                setattr(self, name, func_ffunc)
-            else:
-                setattr(self, name, attr)
-
-        # also need to walk the class ancestor tree...
-        # we do hacky shit instead
-        if isinstance(module, ElmoTextFieldEmbedder):
-            print(" ### In an elmotextfieldembedder!")
-            pass #ipdb.set_trace()
-        if issubclass(module_cls, nn.Module):
-            for name, attr in nn.Module.__dict__.items():
-                if name.startswith("__") or name in _internal_attrs:
-                    continue
-                if callable(attr):
-                    _, func_ffunc, scope_internal = _make_functional(module, params_box, child_params_offset, name, self)
-                    setattr(self, name, func_ffunc)
-                else:
-                    setattr(self, name, attr)
-                if 'named_children' in name:
-                    print("!!! Added %s to %s" % (name, module_cls.__name__))
-                    #ipdb.set_trace()
 
         # Jiant specific: copy each forward function
         if hasattr(module, '_forward_funcs'):
             for name, ffunc in module._forward_funcs.items():
                 # want to create functional versions of these methods and set them as the attribute
-                _, func_ffunc, scope_internal = _make_functional(module, params_box, child_params_offset, name, self)
+                _, func_ffunc = _make_functional(module, params_box, child_params_offset, name, self)
                 setattr(self, name, func_ffunc)
 
         if hasattr(module, 'reset_states'):
             ipdb.set_trace()
-            , func_ffunc = _make_functional(module, params_box, child_params_offset, 'reset_states', self)
+            _, func_ffunc = _make_functional(module, params_box, child_params_offset, 'reset_states', self)
             setattr(self, 'reset_states', func_ffunc)
 
         child_params_offset = params_offset + num_params
         for name, child in module.named_children():
-            if isinstance(child, ElmoTextFieldEmbedder):
-                ipdb.set_trace()
-            child_params_offset, fchild, scope_internal = _make_functional(child, params_box, child_params_offset)
+            child_params_offset, fchild = _make_functional(child, params_box, child_params_offset)
             self._modules[name] = fchild
 
             setattr(self, name, fchild)
@@ -119,7 +85,7 @@ def _make_functional(module, params_box, params_offset, trg_func='forward', pare
 
     #if hasattr(module, '_pair_sentence_forward'):
     #    ipdb.set_trace()
-    return child_params_offset, fmodule, self
+    return child_params_offset, fmodule
 
 
 def make_functional(module):
@@ -131,7 +97,7 @@ def make_functional(module):
     # params_box holds parameters
     # when constructing fmodule, params_box = [None]
     params_box = [None]
-    _, fmodule_internal, scope_internal = _make_functional(module, params_box, 0)
+    _, fmodule_internal = _make_functional(module, params_box, 0)
 
     def fmodule(*args, **kwargs):
         ''' Functional that actually gets returned

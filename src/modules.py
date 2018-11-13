@@ -399,13 +399,13 @@ class AttnPairEncoder(Model):
         s1_s2_vectors = util.weighted_sum(s2, s1_s2_attn)
         s1_w_context = torch.cat([s1, s1_s2_vectors], 2)
 
-        log.info("")
-        log.info("attn s1 s2 norm: %.3f", s1_s2_attn.norm())
-        log.info("attn s1 s2 norm: %.3f", s2_s1_attn.norm())
+        #log.info("")
+        #log.info("attn s1 s2 norm: %.3f", s1_s2_attn.norm())
+        #log.info("attn s1 s2 norm: %.3f", s2_s1_attn.norm())
 
-        log.info("")
-        log.info("post attn s1 norm: %.3f", s1_w_context.norm())
-        log.info("post attn s2 norm: %.3f", s2_w_context.norm())
+        #log.info("")
+        #log.info("post attn s1 norm: %.3f", s1_w_context.norm())
+        #log.info("post attn s2 norm: %.3f", s2_w_context.norm())
 
         modeled_s1 = self._dropout(self._modeling_layer(s1_w_context, s1_mask))
         modeled_s2 = self._dropout(self._modeling_layer(s2_w_context, s2_mask))
