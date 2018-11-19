@@ -493,44 +493,27 @@ class MetaMultiTaskTrainer():
                 # 2) Get candidate parameters by simulating SGD update using the src batch
                 # 3) Calculate loss on the trg batch using the candidate parameters
                 if share: # only optimize shared params
-                    #shared_params = [p for n, p in self._model.sent_encoder.named_parameters() if p.requires_grad and
-                    #        not ('_phrase_layer' in n and 'embed' in n)]
-                    shared_params = []
-                    #for jj, (n, p) in enumerate(self._model.named_parameters()):
-                    #    _shared_params[jj].data = p.data.clone()
-                    #    _shared_params[jj].grad = 0. * _shared_params[jj].grad if _shared_params[jj].grad is not None else None
-                    #    if n in sent_enc_params:
-                    #        if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n):
-                    #            shared_params.append(_shared_params[jj])
-                    pass
+                    shared_params = [p for n, p in self._model.sent_encoder.named_parameters() \
+                                     if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
                 else:
                     params = [p for p in self._model.parameters() if p.requires_grad]
                 if slow_params_approx: # assume cand_params ~= params
                     trg_out = self._model(trg_task, trg_batch)
                     src_out = self._model(src_task, src_batch)
                     if share:
-                        #tloss = self._fwd_func_train(trg_batch, trg_task, False, params=_shared_params, name='_pair_sentence_forward')
-                        #sloss = self._fwd_func_train(src_batch, src_task, False, params=_shared_params, name='_pair_sentence_forward')
-                        tloss = self._fwd_func_train(trg_task, trg_batch, params=_shared_params)
-                        sloss = self._fwd_func_train(src_task, src_batch, params=_shared_params)
-                        trg_grads = autograd.grad(tloss['loss'], shared_params, create_graph=True, allow_unused=True)
-                        src_grads = autograd.grad(sloss['loss'], shared_params, create_graph=True, allow_unused=True)
+                        trg_grads = autograd.grad(trg_out['loss'], shared_params, create_graph=True, allow_unused=True)
+                        src_grads = autograd.grad(src_out['loss'], shared_params, create_graph=True, allow_unused=True)
                     else:
                         trg_grads = autograd.grad(trg_out['loss'], params, create_graph=True, allow_unused=True)
                         src_grads = autograd.grad(src_out['loss'], params, create_graph=True, allow_unused=True)
 
-                    try:
-                        trg_grads_flat = torch.cat([t.view(-1) for t, s in zip(trg_grads, src_grads) if s is not None and t is not None])
-                        src_grads_flat = torch.cat([s.view(-1) for t, s in zip(trg_grads, src_grads) if s is not None and t is not None])
-                    except:
-                        ipdb.set_trace()
+                    trg_grads_flat = torch.cat([t.view(-1) for t, s in zip(trg_grads, src_grads) if s is not None and t is not None])
+                    src_grads_flat = torch.cat([s.view(-1) for t, s in zip(trg_grads, src_grads) if s is not None and t is not None])
 
                     grad_prod = torch.dot(trg_grads_flat, src_grads_flat)
                     if only_pos_reg:
-                        #grad_prod = grad_prod if grad_prod > 0 else 0
-                        #grad_prod = grad_prod if grad_prod < 0 else 0
-                        grad_prod = -(grad_prod ** 2)
-                    #ipdb.set_trace()
+                        grad_prod = grad_prod if grad_prod < 0 else 0
+                        #grad_prod = -(grad_prod ** 2)
                     log.info("GRAD PROD: %.3f", grad_prod)
 
                     trg_norm = trg_grads_flat.norm() + EPS
@@ -538,17 +521,11 @@ class MetaMultiTaskTrainer():
                     if cos_sim_approx:
                         grad_prod = grad_prod / (trg_norm * src_norm)
                         cos_sim = grad_prod
-                        #trg_grads_flat = trg_grads_flat / trg_norm
-                        #src_grads_flat = src_grads_flat / src_norm
-                        #trg_norm = trg_grads_flat.norm() # these should be 1
-                        #src_norm = src_grads_flat.norm()
                     else:
                         cos_sim = grad_prod / (trg_norm * src_norm)
                         if max_sim_grad_norm is not None and trg_norm > max_sim_grad_norm:
-                            #trg_grads_flat = (max_sim_grad_norm / trg_norm) * trg_grads_flat
                             grad_prod = (max_sim_grad_norm / trg_norm) * grad_prod
                         if max_sim_grad_norm is not None and src_norm > max_sim_grad_norm:
-                            #src_grads_flat = (max_sim_grad_norm / src_norm) * src_grads_flat
                             grad_prod = (max_sim_grad_norm / src_norm) * grad_prod
 
                     grad_prod.backward()
@@ -558,17 +535,6 @@ class MetaMultiTaskTrainer():
                     loss = gross_loss - (sim_lr * grad_prod)
                     trg_task_info['loss'] += trg_out['loss'].item()
                     src_task_info['loss'] += src_out['loss'].item()
-
-                    if share: # only optimize shared params
-                        #shared_params = [p for n, p in self._model.sent_encoder.named_parameters() if p.requires_grad and
-                        #        not ('_phrase_layer' in n and 'embed' in n)]
-                        jj = 0
-                        for ii, (n, p) in  enumerate(self._model.sent_encoder.named_parameters()):
-                            if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n):
-                                p.grad -= sim_lr * shared_params[jj].grad
-                                jj = jj + 1
-                    else:
-                        params = [p for p in self._model.parameters() if p.requires_grad]
 
                 else:
                     org_params = [p for p in model.parameters()]
