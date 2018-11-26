@@ -136,18 +136,28 @@ def simulate_sgd(model, params, task, batch, sim_lr=0.01):
     '''
     sim_out = model(task, batch)
     sim_loss = sim_out['loss']
+    # require_grad_params = [p for p in params if p.requires_grad]
+    # require_grad_idxs = [i for i, p in enumerate(params) if p.requires_grad]
+    # grad_orig_params = autograd.grad(sim_loss, requires_grad], create_graph=True, allow_unused=True)
     grad_orig_params = autograd.grad(sim_loss, params, create_graph=True, allow_unused=True)
+    assert sum([g is not None for g in grad_orig_params]) != 0, "All gradients are None!"
     cand_params = [p + (-sim_lr * g) if g is not None else p for g, p in zip(grad_orig_params, params)]
+    # all_cand_params = [p for p in cand_params]
+    # for i, p in zip(require_grad_idxs, require_grad_params):
+    #    all_cand_params[i] = p
+    # return cand_params, sim_out
     return cand_params, sim_out
 
 def set_model_params(model, params):
     ''' Set model's parameters to params.
     Assume that params is the required sizes and shapes for model. '''
     for (name, old_p), new_p in zip(model.named_parameters(), params):
-        #old_p = nn.Parameter(new_p) # should clone somehow
         old_p.data = new_p
-        #setattr(model, name, nn.Parameter(new_p))
 
+
+def filter_params(name, param):
+    ''' Filter for params that can be used in a double backward '''
+    return not ('_phrase_layer' in name and 'embed' in name) and param.requires_grad
 
 class MetaMultiTaskTrainer():
     def __init__(self, model, model_copy, patience=2, val_interval=100, max_vals=50,
@@ -448,24 +458,26 @@ class MetaMultiTaskTrainer():
 
         sample_weights = self._setup_task_weighting(weighting_method, tasks)
 
-        share = 1
         only_pos_reg = self._only_pos_reg
         max_sim_grad_norm = self._max_sim_grad_norm
         cos_sim_approx = self._cos_sim_approx
-        #if share: # only optimize shared params
-        #    #shared_params = [p for n, p in self._model.sent_encoder.named_parameters() if p.requires_grad and
-        #    #        not ('_phrase_layer' in n and 'embed' in n)]
-        #    _shared_params = [copy.deepcopy(p) for n, p in self._model.named_parameters()]
-        #    sent_enc_params = dict([("sent_encoder.%s" % n, 0) for n, p in self._model.sent_encoder.named_parameters()])
-        #else:
-        #    params = [p for p in self._model.parameters() if p.requires_grad]
+        share = 1
+        if share: # only optimize shared params
+            params = [p for n, p in self._model.sent_encoder.named_parameters() \
+                      if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
+            need_grad_params = params
+            need_grad_idxs = [i for i, (n, p) in enumerate(self._model.sent_encoder.named_parameters()) \
+                      if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
+
+        else:
+            params = [p for p in self._model.parameters() if p.requires_grad]
         model = self._model
         mdl_cpy = self._model_copy
 
         # Sample the tasks to train on. Do it all at once (val_interval) for MAX EFFICIENCY.
         #samples_src = random.choices(tasks, weights=sample_weights, k=validation_interval)
         #samples_trg = random.choices(tasks, weights=sample_weights, k=validation_interval)
-        samples_src = [tasks[0] for _ in range(validation_interval)]
+        samples_src = [tasks[0] for _ in range(validation_interval)] # TODO(Alex): this is a hack to make sure tasks are different each time
         samples_trg = [tasks[1] for _ in range(validation_interval)]
         all_tr_metrics = {}
         log.info("Beginning training. Stopping metric: %s", stop_metric)
@@ -492,23 +504,18 @@ class MetaMultiTaskTrainer():
                 # 1) Get a batch from each task
                 # 2) Get candidate parameters by simulating SGD update using the src batch
                 # 3) Calculate loss on the trg batch using the candidate parameters
-                if share: # only optimize shared params
-                    shared_params = [p for n, p in self._model.sent_encoder.named_parameters() \
-                                     if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
-                else:
-                    params = [p for p in self._model.parameters() if p.requires_grad]
+
                 if slow_params_approx: # assume cand_params ~= params
                     trg_out = self._model(trg_task, trg_batch)
                     src_out = self._model(src_task, src_batch)
-                    if share:
-                        trg_grads = autograd.grad(trg_out['loss'], shared_params, create_graph=True, allow_unused=True)
-                        src_grads = autograd.grad(src_out['loss'], shared_params, create_graph=True, allow_unused=True)
-                    else:
-                        trg_grads = autograd.grad(trg_out['loss'], params, create_graph=True, allow_unused=True)
-                        src_grads = autograd.grad(src_out['loss'], params, create_graph=True, allow_unused=True)
-
+                    trg_grads = autograd.grad(trg_out['loss'], params, create_graph=True,
+                                              allow_unused=True)
+                    src_grads = autograd.grad(src_out['loss'], params, create_graph=True,
+                                              allow_unused=True)
                     trg_grads_flat = torch.cat([t.view(-1) for t, s in zip(trg_grads, src_grads) if s is not None and t is not None])
                     src_grads_flat = torch.cat([s.view(-1) for t, s in zip(trg_grads, src_grads) if s is not None and t is not None])
+                    trg_norm = trg_grads_flat.norm() + EPS
+                    src_norm = src_grads_flat.norm() + EPS
 
                     grad_prod = torch.dot(trg_grads_flat, src_grads_flat)
                     if only_pos_reg:
@@ -516,8 +523,6 @@ class MetaMultiTaskTrainer():
                         #grad_prod = -(grad_prod ** 2)
                     log.info("GRAD PROD: %.3f", grad_prod)
 
-                    trg_norm = trg_grads_flat.norm() + EPS
-                    src_norm = src_grads_flat.norm() + EPS
                     if cos_sim_approx:
                         grad_prod = grad_prod / (trg_norm * src_norm)
                         cos_sim = grad_prod
@@ -528,64 +533,76 @@ class MetaMultiTaskTrainer():
                         if max_sim_grad_norm is not None and src_norm > max_sim_grad_norm:
                             grad_prod = (max_sim_grad_norm / src_norm) * grad_prod
 
-                    grad_prod.backward()
-
                     gross_loss = src_out['loss'] + trg_out['loss']
-                    gross_loss.backward()
+                    #gross_loss.backward()
+                    #grad_prod.backward()
                     loss = gross_loss - (sim_lr * grad_prod)
+                    loss.backward()
                     trg_task_info['loss'] += trg_out['loss'].item()
                     src_task_info['loss'] += src_out['loss'].item()
 
                 else:
-                    org_params = [p for p in model.parameters()]
+                    org_params = [p for p in model.parameters()] # TODO(AW): probably redundant
+                    #need_grad_params = [p for n, p in org_params if filter_params(n, p)]
+                    #need_grad_idxs = [i for i, p in enumerate(org_params) if filter_params(p)]
 
-                    src_param_clones = utils.clone_parameters(model, require_grad=True)
-                    src_param_cands, _ = simulate_sgd(model, src_param_clones, src_task, src_batch, sim_lr=sim_lr)
-                    filtered_orig_params = [(i, p) for i, p in enumerate(src_param_clones) if org_params[i].requires_grad]
-
-                    set_model_params(mdl_cpy, src_param_cands)
+                    # clone the parameters and create the simulated params
+                    # set the model copy parameters to be the simulated params
+                    # do a forward pass of the model copy and backward to get gradients
+                    param_cands, _ = simulate_sgd(model, need_grad_params, src_task, src_batch, sim_lr=sim_lr)
+                    tmp = [p for p in org_params]
+                    for j, i in enumerate(need_grad_idxs):
+                        tmp[i] = param_cands[j]
+                    set_model_params(mdl_cpy,tmp)
                     trg_out = mdl_cpy(trg_task, trg_batch)
-                    trg_out['loss'].backward()
+                    trg_out['loss'].backward(create_graph=True)
+
+                    # gather the model copy gradients
+                    # backwards propagate them
+                    cpy_grads = [w.grad for w in mdl_cpy.parameters()] # grads of mdl cpy params
+                    cpy_grads_nonnone = [g for g in cpy_grads if g is not None]
+                    param_cands_w_grad = [p for i, p in enumerate(tmp) if cpy_grads[i] is not None]
+                    src_grads = autograd.grad(param_cands_w_grad, need_grad_params,
+                                              grad_outputs=cpy_grads_nonnone, create_graph=True,
+                                              allow_unused=True)
+
+                    # do the same thing with the tasks flipped
+                    param_cands, _ = simulate_sgd(model, need_grad_params, trg_task, trg_batch, sim_lr=sim_lr)
+                    tmp = [p for p in org_params]
+                    for j, i in enumerate(need_grad_idxs):
+                        tmp[i] = param_cands[j]
+                    set_model_params(mdl_cpy, tmp)
+                    src_out = mdl_cpy(src_task, src_batch)
+                    src_out['loss'].backward(create_graph=True)
 
                     cpy_grads = [w.grad for w in mdl_cpy.parameters()]
-                    filtered_src_param_cands = [p for i, p in enumerate(src_param_cands) if cpy_grads[i] is not None]
-                    filtered_cpy_grads = [g for i, g in enumerate(cpy_grads) if g is not None]
-                    trg_grads_src = autograd.grad(filtered_src_param_cands, [p for _, p in filtered_orig_params],
-                                                  grad_outputs=filtered_cpy_grads, allow_unused=True)
+                    cpy_grads_nonnone = [g for g in cpy_grads if g is not None]
+                    param_cands_w_grad = [p for i, p in enumerate(tmp) if cpy_grads[i] is not None]
+                    trg_grads = autograd.grad(param_cands_w_grad, need_grad_params,
+                                              grad_outputs=cpy_grads_nonnone, create_graph=True,
+                                              allow_unused=True)
 
-                    trg_param_clones = utils.clone_parameters(model, require_grad=True)
-                    trg_param_cands, _ = simulate_sgd(model, trg_param_clones, trg_task, trg_batch, sim_lr=sim_lr)
-
-                    set_model_params(mdl_cpy, trg_param_cands)
-                    src_out = mdl_cpy(trg_task, src_batch)
-                    src_out['loss'].backward()
-
-                    cpy_grads = [w.grad for w in mdl_cpy.parameters()]
-                    filtered_trg_param_cands = [p for i, p in enumerate(trg_param_cands) if cpy_grads[i] is not None]
-                    filtered_cpy_grads = [g for i, g in enumerate(cpy_grads) if g is not None]
-                    src_grads_trg = autograd.grad(filtered_trg_param_cands, [p for _, p in filtered_orig_params],
-                                                  grad_outputs=filtered_cpy_grads, allow_unused=True)
-
-                    for i, (j, _) in enumerate(filtered_orig_params):
-                        if trg_grads_src[i] is not None:
+                    # assign the grads of the clone to the original gradients
+                    for i, j in enumerate(need_grad_idxs):
+                        if src_grads[i] is not None:
                             if org_params[j].grad is None:
-                                org_params[j].grad = trg_grads_src[i]
+                                org_params[j].grad = src_grads[i]
                             else:
-                                org_params[j].grad += trg_grads_src[i]
-                        if src_grads_trg[i] is not None:
+                                org_params[j].grad += src_grads[i]
+                        if trg_grads[i] is not None:
                             if org_params[j].grad is None:
-                                org_params[j].grad += src_grads_trg[i]
+                                org_params[j].grad = trg_grads[i]
                             else:
-                                org_params[j].grad += src_grads_trg[i]
+                                org_params[j].grad += trg_grads[i]
 
                     trg_task_info['loss'] += trg_out['loss'].item()
                     src_task_info['loss'] += src_out['loss'].item()
                     loss = trg_out['loss'] + src_out['loss']
+                    #loss.backward() # this will populate gradients in everything involved in its computation
 
                 if torch.isnan(loss).any():
                     ipdb.set_trace()
-                grads = [p.grad for p in shared_params]
-                if sum([torch.isnan(grad).any().item() for grad in grads]):
+                if sum([torch.isnan(p.grad).any().item() for p in params]):
                     ipdb.set_trace()
                 assert_for_log(not torch.isnan(loss).any(), "NaNs in loss.")
 
