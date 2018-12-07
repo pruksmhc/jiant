@@ -508,10 +508,10 @@ class MetaMultiTaskTrainer():
                     src_norm = src_grads_flat.norm() + EPS
 
                     grad_prod = torch.dot(trg_grads_flat, src_grads_flat)
-                    if only_pos_reg:
-                        grad_prod = grad_prod if grad_prod < 0 else 0
+                    if only_pos_reg: # if grad_prod is negative, it's added to loss and that's ok
+                        grad_prod = grad_prod if grad_prod > 0 else 0
                         #grad_prod = -(grad_prod ** 2)
-                    log.info("GRAD PROD: %.3f", grad_prod)
+                    #log.info("GRAD PROD: %.3f", grad_prod)
 
                     if cos_sim_approx:
                         grad_prod = grad_prod / (trg_norm * src_norm)
