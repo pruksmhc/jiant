@@ -220,7 +220,8 @@ def main(cl_arguments):
                                         args.weighting_method, args.scaling_method,
                                         to_train, opt_params, schd_params,
                                         args.shared_optimizer, args.load_model,
-                                        phase="main", pseudo_meta=args.pseudo_meta)
+                                        phase="main", pseudo_meta=args.pseudo_meta,
+                                        multistep_loss=args.multistep_loss)
 
         else:
             trainer, _, opt_params, schd_params = build_trainer(params, model, args.run_dir, should_decrease)
