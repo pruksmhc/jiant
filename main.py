@@ -149,6 +149,8 @@ def main(cl_arguments):
         from src import metatrainer as mtrainer
         if args.slow_params_approx:
             log.info("\t\twith slow parameter approximation")
+            if args.pseudo_meta:
+                log.info("\t\tNOT")
     from src.models import models as models
     from src import trainer as ntrainer
 
@@ -209,17 +211,25 @@ def main(cl_arguments):
         params = build_trainer_params(args, task_names=[])
         stop_metric = train_tasks[0].val_metric if len(train_tasks) == 1 else 'macro_avg'
         should_decrease = train_tasks[0].val_metric_decreases if len(train_tasks) == 1 else False
+        to_train = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
         if args.metatrain:
             trainer, _, opt_params, schd_params = build_trainer(params, model, model_copy,
                                                                 args.run_dir, should_decrease)
+            best_epochs = trainer.train(train_tasks, stop_metric,
+                                        args.batch_size, args.bpp_base,
+                                        args.weighting_method, args.scaling_method,
+                                        to_train, opt_params, schd_params,
+                                        args.shared_optimizer, args.load_model,
+                                        phase="main", pseudo_meta=args.pseudo_meta)
+
         else:
             trainer, _, opt_params, schd_params = build_trainer(params, model, args.run_dir, should_decrease)
-        to_train = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
-        best_epochs = trainer.train(train_tasks, stop_metric,
-                                    args.batch_size, args.bpp_base,
-                                    args.weighting_method, args.scaling_method,
-                                    to_train, opt_params, schd_params,
-                                    args.shared_optimizer, args.load_model, phase="main")
+            best_epochs = trainer.train(train_tasks, stop_metric,
+                                        args.batch_size, args.bpp_base,
+                                        args.weighting_method, args.scaling_method,
+                                        to_train, opt_params, schd_params,
+                                        args.shared_optimizer, args.load_model,
+                                        phase="main", track_grad_stats=args.track_grad_stats)
 
     # Select model checkpoint from main training run to load
     if not args.train_for_eval:

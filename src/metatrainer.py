@@ -46,6 +46,7 @@ def build_trainer_params(args, task_names):
                   'scheduler_threshold', 'scheduler',
                   'sim_lr', 'max_sim_grad_norm',
                   'slow_params_approx', 'only_pos_reg', 'cos_sim_approx']
+
     # we want to pass to the build_train()
     extra_opts = ['sent_enc', 'd_hid', 'warmup',
                   'max_grad_norm', 'min_lr', 'batch_size',
@@ -405,7 +406,8 @@ class MetaMultiTaskTrainer():
               batch_size, n_batches_per_pass,
               weighting_method, scaling_method,
               train_params, optimizer_params, scheduler_params,
-              shared_optimizer=1, load_model=1, phase="main"):
+              shared_optimizer=1, load_model=1, phase="main",
+              pseudo_meta=False):
         """
         The main training loop.
         Training will stop if we run out of patience or hit the minimum learning rate.
@@ -466,7 +468,7 @@ class MetaMultiTaskTrainer():
         only_pos_reg = self._only_pos_reg
         max_sim_grad_norm = self._max_sim_grad_norm
         cos_sim_approx = self._cos_sim_approx
-        share = 1
+        share = 1 # TODO(Alex): make this an option
         if share: # only optimize shared params
             params = [p for n, p in self._model.sent_encoder.named_parameters() \
                       if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
@@ -541,7 +543,10 @@ class MetaMultiTaskTrainer():
                     gross_loss = src_out['loss'] + trg_out['loss']
                     #gross_loss.backward()
                     #grad_prod.backward()
-                    loss = gross_loss - (sim_lr * grad_prod)
+                    if pseudo_meta:
+                        loss = gross_loss
+                    else:
+                        loss = gross_loss - (sim_lr * grad_prod)
                     loss.backward()
                     trg_loss = trg_out['loss'].item()
                     src_loss = src_out['loss'].item()
@@ -658,6 +663,8 @@ class MetaMultiTaskTrainer():
                          trg_task_info['total_batches_trained'], trg_description)
                 if slow_params_approx:
                     log.info("\tnet loss: %.3f, src loss: %.3f, trg loss: %.3f", loss, src_loss, trg_loss)
+                    if pseudo_meta:
+                        log.info("\tgross loss: %.3f", gross_loss)
                     log.info("\tgrad regularizer: %.3f, cos_sim: %.3f", grad_prod, cos_sim)
                     log.info("\tgrad1 norm: %.3f, grad2 norm: %.3f", src_norm, trg_norm)
                     self._tb_writers["gross_loss"].add_scalar("approx/loss", gross_loss, n_update)

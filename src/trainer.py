@@ -284,7 +284,8 @@ class SamplingMultiTaskTrainer():
               batch_size, n_batches_per_pass,
               weighting_method, scaling_method,
               train_params, optimizer_params, scheduler_params,
-              shared_optimizer=1, load_model=1, phase="main"):
+              shared_optimizer=1, load_model=1, phase="main",
+              track_grad_stats=False):
         """
         The main training loop.
         Training will stop if we run out of patience or hit the minimum learning rate.
@@ -446,6 +447,9 @@ class SamplingMultiTaskTrainer():
                 if self._grad_norm:
                     clip_grad_norm_(self._model.parameters(), self._grad_norm)
 
+                if track_grad_stats:
+                    pass
+
                 optimizer.step()
                 n_pass += 1  # update per batch
 
@@ -473,12 +477,10 @@ class SamplingMultiTaskTrainer():
                 description = self._description_from_metrics(task_metrics)
                 log.info("Update %d: task %s, batch %d (%d): %s", n_pass,
                          task.name, n_batches_since_val, total_batches_trained, description)
+                grad_norm = np.sum([(pp.grad ** 2).sum().item() for pp in self._model.parameters() if pp.grad is not None])
+                log.info("\t\tgrad norm: %.3f" % grad_norm) # TODO(Alex): wrap this with cmdline arg
 
                 task_info['last_log'] = time.time()
-
-                grad_norm = np.sum([(pp.grad ** 2).sum().item() for pp in self._model.parameters() if pp.grad is not None])
-                log.info("\tgrad norm: %.3f" % grad_norm)
-
 
                 if self._model.utilization is not None:
                     batch_util = self._model.utilization.get_metric()
