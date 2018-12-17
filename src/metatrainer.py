@@ -42,7 +42,8 @@ def build_trainer_params(args, task_names):
                                                             attr_name)
     params = {}
     train_opts = ['optimizer', 'lr', 'batch_size', 'lr_decay_factor',
-                  'task_patience', 'patience', 'scheduler_threshold',
+                  'task_patience', 'patience',
+                  'scheduler_threshold', 'scheduler',
                   'sim_lr', 'max_sim_grad_norm',
                   'slow_params_approx', 'only_pos_reg', 'cos_sim_approx']
     # we want to pass to the build_train()
@@ -59,6 +60,35 @@ def build_trainer_params(args, task_names):
     params['dec_val_scale'] = _get_task_attr('dec_val_scale')
 
     return Params(params)
+
+def build_scheduler(params, should_decrease=True):
+    schd_type = params['scheduler']
+    if 'transformer' in params['sent_enc'] or schd_type  == 'noam':
+        assert False, "Transformer is not yet tested, still in experimental stage :-("
+        schd_params = Params({'type': schd_type,
+                              'model_size': params['d_hid'],
+                              'warmup_steps': params['warmup'],
+                              'factor': 1.0})
+        log.info('\tUsing noam scheduler with warmup %d!', params['warmup'])
+    elif schd_type == 'cosine':
+        # TODO(Alex): lots of other parameters to set
+        schd_params = Params({'type': schd_type,
+                              'T_max': params['max_vals']
+                             })
+        log.info('\tUsing cosine scheduler!')
+    elif schd_type == 'reduce_on_plateau':
+        schd_params = Params({'type': schd_type,
+                              'mode': 'min' if should_decrease else 'max',
+                              'factor': params['lr_decay_factor'],
+                              'patience': params['task_patience'],
+                              'threshold': params['scheduler_threshold'],
+                              'threshold_mode': 'abs',
+                              'verbose': True})
+        log.info('\tUsing ReduceLROnPlateau scheduler!')
+    else:
+        raise ValueError("Scheduler %s not supported!" % scheduler)
+
+    return schd_params
 
 
 def build_trainer(params, model, model_copy, run_dir, metric_should_decrease=True):
@@ -84,22 +114,7 @@ def build_trainer(params, model, model_copy, run_dir, metric_should_decrease=Tru
         opt_params = Params({'type': params['optimizer'], 'lr': params['lr'],
                              'weight_decay': 0})
 
-    if 'transformer' in params['sent_enc']:
-        assert False, "Transformer is not yet tested, still in experimental stage :-("
-        schd_params = Params({'type': 'noam',
-                              'model_size': params['d_hid'],
-                              'warmup_steps': params['warmup'],
-                              'factor': 1.0})
-        log.info('\tUsing noam scheduler with warmup %d!', params['warmup'])
-    else:
-        schd_params = Params({'type': 'reduce_on_plateau',
-                              'mode': 'min' if metric_should_decrease else 'max',
-                              'factor': params['lr_decay_factor'],
-                              'patience': params['task_patience'],
-                              'threshold': params['scheduler_threshold'],
-                              'threshold_mode': 'abs',
-                              'verbose': True})
-        log.info('\tUsing ReduceLROnPlateau scheduler!')
+    schd_params = build_scheduler(params, metric_should_decrease)
 
     train_params = Params({'cuda_device': params['cuda'],
                            'patience': params['patience'],
@@ -544,7 +559,7 @@ class MetaMultiTaskTrainer():
                     # gather the model copy gradients and backwards propagate them
                     # NOTE(AW): I'm pretty sure the autograd.grad calls don't need create_graph b/c I already
                     #           created graph onthe backwards calls
-                    param_cands, _ = simulate_sgd(model, need_grad_params, src_task, src_batch, sim_lr=sim_lr)
+                    param_cands, src_out = simulate_sgd(model, need_grad_params, src_task, src_batch, sim_lr=sim_lr)
                     tmp = [p for p in org_params]
                     for j, i in enumerate(need_grad_idxs):
                         tmp[i] = param_cands[j]
@@ -561,7 +576,7 @@ class MetaMultiTaskTrainer():
                                               allow_unused=True)
 
                     # do the same thing with the tasks flipped
-                    param_cands, _ = simulate_sgd(model, need_grad_params, trg_task, trg_batch, sim_lr=sim_lr)
+                    param_cands, trg_out = simulate_sgd(model, need_grad_params, trg_task, trg_batch, sim_lr=sim_lr)
                     tmp = [p for p in org_params]
                     for j, i in enumerate(need_grad_idxs):
                         tmp[i] = param_cands[j]
@@ -575,6 +590,13 @@ class MetaMultiTaskTrainer():
                     trg_grads = autograd.grad(param_cands_w_grad, need_grad_params,
                                               grad_outputs=cpy_grads_nonnone, create_graph=False,
                                               allow_unused=True)
+
+                    if False:
+                        sim_src_loss = src_out['loss']
+                        sim_src_loss.backward()
+                        sim_trg_loss = trg_out['loss']
+                        sim_trg_loss.backward()
+
 
                     # assign the grads of the clone to the original gradients
                     for i, j in enumerate(need_grad_idxs):
