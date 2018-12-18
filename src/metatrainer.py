@@ -73,7 +73,7 @@ def build_optimizer(params):
 def build_scheduler(params, should_decrease=True):
     ''' Build scheduler params '''
     schd_type = params['scheduler']
-    if 'transformer' in params['sent_enc'] or schd_type  == 'noam':
+    if 'transformer' in params['sent_enc'] or schd_type == 'noam':
         assert False, "Transformer is not yet tested, still in experimental stage :-("
         schd_params = Params({'type': schd_type,
                               'model_size': params['d_hid'],
@@ -96,7 +96,7 @@ def build_scheduler(params, should_decrease=True):
                               'verbose': True})
         log.info('\tUsing ReduceLROnPlateau scheduler!')
     else:
-        raise ValueError("Scheduler %s not supported!" % scheduler)
+        raise ValueError("Scheduler %s not supported!" % schd_type)
 
     return schd_params
 
@@ -157,13 +157,13 @@ def simulate_sgd(model, params, task, batch, sim_lr=0.01):
     grad_orig_params = autograd.grad(sim_loss, params, create_graph=True, allow_unused=True)
     assert sum([g is not None for g in grad_orig_params]) != 0, "All gradients are None!"
     cand_params = [p + (-sim_lr * g) if g is not None else p for g, p in zip(grad_orig_params, params)]
-    return cand_params, sim_out
+    return cand_params, sim_out, grad_orig_params
 
 
 def set_model_params(model, params):
     ''' Set model's parameters to params.
     Assume that params is the required sizes and shapes for model. '''
-    for (name, old_p), new_p in zip(model.named_parameters(), params):
+    for (_, old_p), new_p in zip(model.named_parameters(), params):
         old_p.data = new_p
 
 
@@ -409,7 +409,8 @@ class MetaMultiTaskTrainer():
               weighting_method, scaling_method,
               train_params, optimizer_params, scheduler_params,
               shared_optimizer=1, load_model=1, phase="main",
-              pseudo_meta=False, multistep_loss=False):
+              pseudo_meta=False,
+              multistep_loss=False, multistep_scale=.1):
         """
         The main training loop.
         Training will stop if we run out of patience or hit the minimum learning rate.
@@ -543,8 +544,6 @@ class MetaMultiTaskTrainer():
                             grad_prod = (max_sim_grad_norm / src_norm) * grad_prod
 
                     gross_loss = src_out['loss'] + trg_out['loss']
-                    #gross_loss.backward()
-                    #grad_prod.backward()
                     if pseudo_meta:
                         loss = gross_loss
                     else:
@@ -566,14 +565,14 @@ class MetaMultiTaskTrainer():
                     # gather the model copy gradients and backwards propagate them
                     # NOTE(AW): I'm pretty sure the autograd.grad calls don't need create_graph b/c I already
                     #           created graph on the backwards calls
-                    param_cands, sim_src_out = simulate_sgd(model, need_grad_params, src_task, src_batch, sim_lr=sim_lr)
+                    param_cands, sim_src_out, sim_src_grads = simulate_sgd(model, need_grad_params, src_task, src_batch, sim_lr=sim_lr)
                     tmp = [p for p in org_params]
                     for j, i in enumerate(need_grad_idxs):
                         tmp[i] = param_cands[j]
                     set_model_params(mdl_cpy, tmp)
                     mdl_cpy.zero_grad()
                     trg_out = mdl_cpy(trg_task, trg_batch)
-                    trg_out['loss'].backward(create_graph=True)
+                    trg_out['loss'].backward(create_graph=True, retain_graph=True)
 
                     cpy_grads = [w.grad for w in mdl_cpy.parameters()] # grads of mdl cpy params
                     cpy_grads_nonnone = [g for g in cpy_grads if g is not None]
@@ -583,21 +582,20 @@ class MetaMultiTaskTrainer():
                                               allow_unused=True)
 
                     # do the same thing with the tasks flipped
-                    param_cands, sim_trg_out = simulate_sgd(model, need_grad_params, trg_task, trg_batch, sim_lr=sim_lr)
+                    param_cands, sim_trg_out, sim_trg_grads = simulate_sgd(model, need_grad_params, trg_task, trg_batch, sim_lr=sim_lr)
                     tmp = [p for p in org_params]
                     for j, i in enumerate(need_grad_idxs):
                         tmp[i] = param_cands[j]
                     set_model_params(mdl_cpy, tmp)
                     mdl_cpy.zero_grad()
                     src_out = mdl_cpy(src_task, src_batch)
-                    src_out['loss'].backward(create_graph=True)
+                    src_out['loss'].backward(create_graph=True, retain_graph=True)
                     cpy_grads = [w.grad for w in mdl_cpy.parameters()]
                     cpy_grads_nonnone = [g for g in cpy_grads if g is not None]
                     param_cands_w_grad = [p for i, p in enumerate(tmp) if cpy_grads[i] is not None]
                     trg_grads = autograd.grad(param_cands_w_grad, need_grad_params,
                                               grad_outputs=cpy_grads_nonnone, create_graph=False,
                                               allow_unused=True)
-
 
                     # assign the grads of the clone to the original gradients
                     for i, j in enumerate(need_grad_idxs):
@@ -612,14 +610,14 @@ class MetaMultiTaskTrainer():
                             else:
                                 org_params[j].grad += trg_grads[i]
 
-                    if multistep_loss:
-                        # the sim loss is calculated using original model
-                        # so this should add gradient wrt sim loss
-                        # to the existing gradients
-                        sim_src_loss = sim_src_out['loss']
-                        sim_src_loss.backward()
-                        sim_trg_loss = sim_trg_out['loss']
-                        sim_trg_loss.backward()
+                        if multistep_loss:
+                            # the sim loss is calculated using original model
+                            # so this should add gradient wrt sim loss
+                            # to the existing gradients
+                            if sim_trg_grads[i] is not None:
+                                org_params[j].grad += sim_trg_grads[i] * multistep_scale
+                            if sim_src_grads[i] is not None:
+                                org_params[j].grad += sim_src_grads[i] * multistep_scale
 
                     trg_loss = trg_out['loss'].item()
                     src_loss = src_out['loss'].item()
