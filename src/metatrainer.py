@@ -45,7 +45,7 @@ def build_trainer_params(args, task_names):
                   'task_patience', 'patience',
                   'scheduler_threshold', 'scheduler',
                   'sim_lr', 'max_sim_grad_norm',
-                  'slow_params_approx', 'only_pos_reg', 'cos_sim_approx']
+                  'slow_params_approx', 'only_pos_reg', 'approx_term']
 
     # we want to pass to the build_train()
     extra_opts = ['sent_enc', 'd_hid', 'warmup',
@@ -132,7 +132,7 @@ def build_trainer(params, model, model_copy, run_dir, metric_should_decrease=Tru
                            'sim_lr': params['sim_lr'],
                            'max_sim_grad_norm': params['max_sim_grad_norm'],
                            'slow_params_approx': params['slow_params_approx'],
-                           'only_pos_reg': params['only_pos_reg'], 'cos_sim_approx': params['cos_sim_approx']})
+                           'only_pos_reg': params['only_pos_reg'], 'approx_term': params['approx_term']})
     trainer = MetaMultiTaskTrainer.from_params(model, model_copy, run_dir,
                                                copy.deepcopy(train_params))
     return trainer, train_params, opt_params, schd_params
@@ -174,7 +174,7 @@ class MetaMultiTaskTrainer():
                  keep_all_checkpoints=False, val_data_limit=5000,
                  dec_val_scale=100, training_data_fraction=1.0,
                  sim_lr=0.001, max_sim_grad_norm=5.,
-                 slow_params_approx=0, only_pos_reg=0, cos_sim_approx=0):
+                 slow_params_approx=0, only_pos_reg=0, approx_term=0):
         """
         The training coordinator. Unusually complicated to handle MTL with tasks of
         diverse sizes.
@@ -231,7 +231,7 @@ class MetaMultiTaskTrainer():
         self._sim_lr = sim_lr
         self._slow_params_approx = slow_params_approx
         self._only_pos_reg = only_pos_reg
-        self._cos_sim_approx = cos_sim_approx
+        self._approx_term = approx_term
         self._keep_all_checkpoints = keep_all_checkpoints
         self._val_data_limit = val_data_limit
         self._dec_val_scale = dec_val_scale
@@ -470,7 +470,7 @@ class MetaMultiTaskTrainer():
 
         only_pos_reg = self._only_pos_reg
         max_sim_grad_norm = self._max_sim_grad_norm
-        cos_sim_approx = self._cos_sim_approx
+        approx_term = self._approx_term
         share = 1 # TODO(Alex): make this an option
         if share: # only optimize shared params
             params = [p for n, p in self._model.sent_encoder.named_parameters() \
@@ -529,19 +529,23 @@ class MetaMultiTaskTrainer():
 
                     grad_prod = torch.dot(trg_grads_flat, src_grads_flat)
                     if only_pos_reg: # if grad_prod is negative, it's added to loss and that's ok
-                        grad_prod = grad_prod if grad_prod > 0 else 0
-                        #grad_prod = -(grad_prod ** 2)
-                    #log.info("GRAD PROD: %.3f", grad_prod)
+                        grad_prod = torch.max(grad_prod, 0.)
 
-                    if cos_sim_approx:
+                    #if approx_term:
+                    if approx_term == 'cos_sim':
                         grad_prod = grad_prod / (trg_norm * src_norm)
                         cos_sim = grad_prod
-                    else:
+                    elif approx_term == 'sign_cos_sim':
+                        cos_sim = grad_prod / (trg_norm * src_norm)
+                        grad_prod = torch.sign(cos_sim)
+                    elif approx_term == 'dot_product':
                         cos_sim = grad_prod / (trg_norm * src_norm)
                         if max_sim_grad_norm is not None and trg_norm > max_sim_grad_norm:
                             grad_prod = (max_sim_grad_norm / trg_norm) * grad_prod
                         if max_sim_grad_norm is not None and src_norm > max_sim_grad_norm:
                             grad_prod = (max_sim_grad_norm / src_norm) * grad_prod
+                    else:
+                        raise ValueError("Regularization method %s not found!" % approx_term)
 
                     gross_loss = src_out['loss'] + trg_out['loss']
                     if pseudo_meta:
@@ -1184,7 +1188,7 @@ class MetaMultiTaskTrainer():
         max_sim_grad_norm = params.pop("max_sim_grad_norm", None)
         slow_params_approx = params.pop("slow_params_approx", 0)
         only_pos_reg = params.pop("only_pos_reg", 0)
-        cos_sim_approx = params.pop("cos_sim_approx", 0)
+        approx_term = params.pop("approx_term", 0)
 
         params.assert_empty(cls.__name__)
         return MetaMultiTaskTrainer(model, model_copy, patience=patience,
@@ -1198,4 +1202,4 @@ class MetaMultiTaskTrainer():
                                     training_data_fraction=training_data_fraction,
                                     sim_lr=sim_lr, max_sim_grad_norm=max_sim_grad_norm,
                                     slow_params_approx=slow_params_approx, only_pos_reg=only_pos_reg,
-                                    cos_sim_approx=cos_sim_approx)
+                                    approx_term=approx_term)
