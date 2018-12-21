@@ -319,6 +319,7 @@ class MetaMultiTaskTrainer():
             iterator = BucketIterator(sorting_keys=sorting_keys,
                                       max_instances_in_memory=N_EXS_IN_MEMORY,
                                       batch_size=batch_size,
+                                      padding_noise=0.0, # TODO(Alex): DELETE WHEN DONE
                                       biggest_batch_first=True)
             tr_generator = iterator(task.train_data, num_epochs=None, cuda_device=self._cuda_device)
 
@@ -487,12 +488,15 @@ class MetaMultiTaskTrainer():
         # Sample the tasks to train on. Do it all at once (val_interval) for MAX EFFICIENCY.
         #samples_src = random.choices(tasks, weights=sample_weights, k=validation_interval)
         #samples_trg = random.choices(tasks, weights=sample_weights, k=validation_interval)
-        samples_src = [tasks[0] for _ in range(validation_interval)] # TODO(Alex): this is a hack to make sure tasks are different each time
+        # TODO(Alex): this is a hack to make sure tasks are different each time
+        samples_src = [tasks[0] for _ in range(validation_interval)]
         samples_trg = [tasks[1] for _ in range(validation_interval)]
         all_tr_metrics = {}
         log.info("Beginning training. Stopping metric: %s", stop_metric)
+        avg_cos_sim = 0.
         while not should_stop:
             self._model.train()
+            #self._model.eval()
             src_task = samples_src[n_update % (validation_interval)]
             trg_task = samples_trg[n_update % (validation_interval)]
             src_task_info = task_infos[src_task.name]
@@ -502,7 +506,8 @@ class MetaMultiTaskTrainer():
             src_gen, trg_gen = src_task_info['tr_generator'], trg_task_info['tr_generator']
             optimizer = g_optimizer if shared_optimizer else src_task_info['optimizer']
             scheduler = g_scheduler if shared_optimizer else src_task_info['scheduler']
-            for src_batch, trg_batch in zip(itertools.islice(src_gen, n_batches_per_pass), itertools.islice(trg_gen, n_batches_per_pass)):
+            for src_batch, trg_batch in zip(itertools.islice(src_gen, n_batches_per_pass),
+                                            itertools.islice(trg_gen, n_batches_per_pass)):
                 src_task_info['n_batches_since_val'] += 1
                 trg_task_info['n_batches_since_val'] += 1
                 src_task_info['total_batches_trained'] += 1
@@ -518,6 +523,7 @@ class MetaMultiTaskTrainer():
                 if slow_params_approx: # assume cand_params ~= params
                     trg_out = self._model(trg_task, trg_batch)
                     src_out = self._model(src_task, src_batch)
+                    #trg_out = self._model(src_task, trg_batch)
                     trg_grads = autograd.grad(trg_out['loss'], params, create_graph=True,
                                               allow_unused=True)
                     src_grads = autograd.grad(src_out['loss'], params, create_graph=True,
@@ -530,16 +536,14 @@ class MetaMultiTaskTrainer():
                     grad_prod = torch.dot(trg_grads_flat, src_grads_flat)
                     if only_pos_reg: # if grad_prod is negative, it's added to loss and that's ok
                         grad_prod = torch.max(grad_prod, 0.)
-
-                    #if approx_term:
+                    cos_sim = grad_prod / (trg_norm * src_norm)
+                    avg_cos_sim += cos_sim.item()
                     if approx_term == 'cos_sim':
-                        grad_prod = grad_prod / (trg_norm * src_norm)
-                        cos_sim = grad_prod
+                        grad_prod = cos_sim
                     elif approx_term == 'sign_cos_sim':
-                        cos_sim = grad_prod / (trg_norm * src_norm)
                         grad_prod = torch.sign(cos_sim)
                     elif approx_term == 'dot_product':
-                        cos_sim = grad_prod / (trg_norm * src_norm)
+                        grad_prod = cos_sim
                         if max_sim_grad_norm is not None and trg_norm > max_sim_grad_norm:
                             grad_prod = (max_sim_grad_norm / trg_norm) * grad_prod
                         if max_sim_grad_norm is not None and src_norm > max_sim_grad_norm:
@@ -557,6 +561,22 @@ class MetaMultiTaskTrainer():
                     src_loss = src_out['loss'].item()
                     trg_task_info['loss'] += trg_loss
                     src_task_info['loss'] += src_loss
+
+                    # TODO(Alex): debugging
+                    #self._model.eval()
+                    #src_out2 = self._model(src_task, src_batch)
+                    #trg_out2 = self._model(src_task, trg_batch)
+                    #trg_grads2 = autograd.grad(trg_out2['loss'], params, create_graph=True,
+                    #                          allow_unused=True)
+                    #src_grads2 = autograd.grad(src_out2['loss'], params, create_graph=True,
+                    #                          allow_unused=True)
+                    #trg_grads_flat2 = torch.cat([t.view(-1) for t, s in zip(trg_grads2, src_grads2) if s is not None and t is not None])
+                    #src_grads_flat2 = torch.cat([s.view(-1) for t, s in zip(trg_grads2, src_grads2) if s is not None and t is not None])
+                    #trg_norm2 = trg_grads_flat2.norm() + EPS
+                    #src_norm2 = src_grads_flat2.norm() + EPS
+                    #grad_prod2 = torch.dot(trg_grads_flat2, src_grads_flat2)
+                    #self._model.train()
+                    #ipdb.set_trace()
 
                 else: # exact case
                     org_params = [p for p in model.parameters()] # TODO(AW): probably redundant
@@ -657,8 +677,10 @@ class MetaMultiTaskTrainer():
             if time.time() - src_task_info['last_log'] > self._log_interval:
                 src_task_metrics = src_task.get_metrics()
                 trg_task_metrics = trg_task.get_metrics()
+                #trg_task_metrics = src_task.get_metrics()
                 src_nbsv = src_task_info['n_batches_since_val']
                 trg_nbsv = trg_task_info['n_batches_since_val']
+                log.info("AVERAGE COS SIM: %.5f", avg_cos_sim / src_nbsv) # TODO(Alex): debugging
 
                 src_task_metrics["%s_loss" % src_task.name] = src_task_info['loss'] / src_nbsv
                 trg_task_metrics["%s_loss" % trg_task.name] = trg_task_info['loss'] / trg_nbsv
@@ -672,7 +694,7 @@ class MetaMultiTaskTrainer():
                     log.info("\tnet loss: %.3f, src loss: %.3f, trg loss: %.3f", loss, src_loss, trg_loss)
                     if pseudo_meta:
                         log.info("\tgross loss: %.3f", gross_loss)
-                    log.info("\tgrad regularizer: %.3f, cos_sim: %.3f", grad_prod, cos_sim)
+                    log.info("\tgrad regularizer: %.5f, cos_sim: %.5f", grad_prod, cos_sim)
                     log.info("\tgrad1 norm: %.3f, grad2 norm: %.3f", src_norm, trg_norm)
                     self._tb_writers["gross_loss"].add_scalar("approx/loss", gross_loss, n_update)
                     self._tb_writers["grad"].add_scalar("approx/grad_prod", grad_prod, n_update)
@@ -705,6 +727,7 @@ class MetaMultiTaskTrainer():
                 # Dump and log all of our current info
                 epoch = int(n_update / validation_interval)
                 log.info("***** Pass %d / Epoch %d *****", n_update, epoch)
+                log.info("AVERAGE COS SIM: %.5f", (2 * avg_cos_sim / validation_interval)) # TODO(Alex): debugging
                 # Get metrics for all training progress so far
                 for task in tasks:
                     task_info = task_infos[task.name]
