@@ -138,7 +138,7 @@ def build_trainer(params, model, model_copy, run_dir, metric_should_decrease=Tru
     return trainer, train_params, opt_params, schd_params
 
 
-def simulate_sgd(model, params, task, batch, sim_lr=0.01):
+def simulate_sgd(model, params, task, batch, sim_lr=0.01, n_steps=1):
     ''' Given original parameters and a batch of inputs and outputs,
     compute the model's loss evaluated on the given inputs and parameters.
     Then compute the gradient of the loss and update the original params.
@@ -543,11 +543,13 @@ class MetaMultiTaskTrainer():
                     elif approx_term == 'sign_cos_sim':
                         grad_prod = torch.sign(cos_sim)
                     elif approx_term == 'dot_product':
-                        grad_prod = cos_sim
+                        # grad_prod is already dot product
                         if max_sim_grad_norm is not None and trg_norm > max_sim_grad_norm:
                             grad_prod = (max_sim_grad_norm / trg_norm) * grad_prod
                         if max_sim_grad_norm is not None and src_norm > max_sim_grad_norm:
                             grad_prod = (max_sim_grad_norm / src_norm) * grad_prod
+                    elif approx_term == 'only_cos_sim':
+                        pass
                     else:
                         raise ValueError("Regularization method %s not found!" % approx_term)
 
@@ -556,6 +558,10 @@ class MetaMultiTaskTrainer():
                         loss = gross_loss
                     else:
                         loss = gross_loss - (sim_lr * grad_prod)
+
+                    if approx_term == 'only_cos_sim': # TODO(Alex): delete when done
+                        loss = -cos_sim
+
                     loss.backward()
                     trg_loss = trg_out['loss'].item()
                     src_loss = src_out['loss'].item()
