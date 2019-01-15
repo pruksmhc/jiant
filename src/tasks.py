@@ -710,7 +710,7 @@ class LanguageModelingTask(SequenceGenerationTask):
             for sent in self.load_data(path):
                 yield sent
 
-
+@register_task('wiki2', rel_path="WikiText2")
 class WikiTextLMTask(LanguageModelingTask):
     """ Language modeling on a Wikitext dataset
     See base class: LanguageModelingTask

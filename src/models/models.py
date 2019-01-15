@@ -42,7 +42,7 @@ from ..modules import SentenceEncoder, BoWSentEncoder, \
 from ..utils import assert_for_log, get_batch_utilization, get_batch_size
 from ..preprocess import parse_task_list_arg, get_tasks
 from .seq2seq_decoder import Seq2SeqDecoder
-from .conv import FConvEncoder
+from .conv import FConvEncoder, FConvDecoder
 
 
 # Elmo stuff
@@ -74,14 +74,20 @@ def build_model(args, vocab, pretrained_embs, tasks):
     rnn_params = Params({'input_size': d_emb, 'bidirectional': True,
                          'hidden_size': args.d_hid, 'num_layers': args.n_layers_enc})
 
-    if sum([isinstance(task, LanguageModelingTask) for task in tasks]) or \
-            args.sent_enc == 'bilm':
-        assert_for_log(args.sent_enc in ['rnn', 'bilm'], "Only RNNLM supported!")
+    if sum([isinstance(task, LanguageModelingTask) for task in tasks]):
+        assert_for_log(args.sent_enc in ['bilm', 'convlm'], "Only RNNLM supported!")
+
+    if args.sent_enc == 'bilm':
         if args.elmo:
             assert_for_log(args.elmo_chars_only, "LM with full ELMo not supported")
         shared_enc = BiLMEncoder(d_emb, args.d_hid, args.d_hid, args.n_layers_enc)
         d_sent = 2 * args.d_hid
         log.info("Using BiLM architecture for shared encoder!")
+    elif args.sent_enc == 'convlm':
+        if args.elmo:
+            assert_for_log(args.elmo_chars_only, "LM with full ELMo not supported")
+        shared_enc = FConvDecoder(vocab, input_dim=d_emb, output_dim=d_sent)
+        log.info("Using ConvLM architecture for shared encoder!")
     elif args.sent_enc == 'rnn':
         shared_enc = s2s_e.by_name('lstm').from_params(copy.deepcopy(rnn_params))
         d_sent = 2 * args.d_hid
@@ -866,7 +872,8 @@ class MultiTaskModel(nn.Module):
         """
         out = {}
         sent_encoder = self.sent_encoder
-        assert_for_log(isinstance(sent_encoder._phrase_layer, BiLMEncoder),
+        assert_for_log(isinstance(sent_encoder._phrase_layer, BiLMEncoder) or
+                       isinstance(sent_encoder._phrase_layer, FConvDecoder),
                        "Not using LM for language modeling task!")
         assert_for_log('targs' in batch and 'words' in batch['targs'],
                        "Batch missing target words!")
@@ -879,23 +886,32 @@ class MultiTaskModel(nn.Module):
         sent = sent.masked_fill(1 - mask.byte(), 0)  # avoid NaNs
 
         # Split encoder outputs by direction
-        split = int(self.sent_encoder._phrase_layer.get_output_dim() / 2)
-        fwd, bwd = sent[:, :, :split], sent[:, :, split:split*2]
-        if split * 2 < sent.size(2): # skip embeddings
-           out_embs = sent[:, :, split*2:]
-           fwd = torch.cat([fwd, out_embs], dim=2)
-           bwd = torch.cat([bwd, out_embs], dim=2)
+        if isinstance(sent_encoder._phrase_layer, BiLMEncoder):
+            split = int(self.sent_encoder._phrase_layer.get_output_dim() / 2)
+            fwd, bwd = sent[:, :, :split], sent[:, :, split:split*2]
+            if split * 2 < sent.size(2): # skip embeddings
+                out_embs = sent[:, :, split*2:]
+                fwd = torch.cat([fwd, out_embs], dim=2)
+                bwd = torch.cat([bwd, out_embs], dim=2)
 
-        # Forward and backward logits and targs
-        hid2voc = getattr(self, "%s_hid2voc" % task.name)
-        logits_fwd = hid2voc(fwd).view(b_size * seq_len, -1)
-        logits_bwd = hid2voc(bwd).view(b_size * seq_len, -1)
-        logits = torch.cat([logits_fwd, logits_bwd], dim=0)
-        out['logits'] = logits
-        trg_fwd = batch['targs']['words'].view(-1)
-        trg_bwd = batch['targs_b']['words'].view(-1)
-        targs = torch.cat([trg_fwd, trg_bwd], dim=0)
-        assert logits.size(0) == targs.size(0), "Number of logits and targets differ!"
+            # Forward and backward logits and targs
+            hid2voc = getattr(self, "%s_hid2voc" % task.name)
+            logits_fwd = hid2voc(fwd).view(b_size * seq_len, -1)
+            logits_bwd = hid2voc(bwd).view(b_size * seq_len, -1)
+            logits = torch.cat([logits_fwd, logits_bwd], dim=0)
+            out['logits'] = logits
+            trg_fwd = batch['targs']['words'].view(-1)
+            trg_bwd = batch['targs_b']['words'].view(-1)
+            targs = torch.cat([trg_fwd, trg_bwd], dim=0)
+            assert logits.size(0) == targs.size(0), "Number of logits and targets differ!"
+
+        else:
+            fwd = sent
+            hid2voc = getattr(self, "%s_hid2voc" % task.name)
+            logits = hid2voc(fwd).view(b_size * seq_len, -1)
+            out['logits'] = logits
+            targs = batch['targs']['words'].view(-1)
+            assert logits.size(0) == targs.size(0), "Number of logits and targets differ!"
         out['loss'] = F.cross_entropy(logits, targs, ignore_index=pad_idx)
         task.scorer1(out['loss'].item())
         if predict:
