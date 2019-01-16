@@ -29,8 +29,6 @@ from . import config
 from . import utils
 from . import functionize
 
-import ipdb
-
 N_EXS_IN_MEMORY = 100000
 EPS = 1e-5
 
@@ -319,7 +317,7 @@ class MetaMultiTaskTrainer():
             iterator = BucketIterator(sorting_keys=sorting_keys,
                                       max_instances_in_memory=N_EXS_IN_MEMORY,
                                       batch_size=batch_size,
-                                      padding_noise=0.0, # TODO(Alex): DELETE WHEN DONE
+                                      #padding_noise=0.0, # TODO(Alex): DELETE WHEN DONE
                                       biggest_batch_first=True)
             tr_generator = iterator(task.train_data, num_epochs=None, cuda_device=self._cuda_device)
 
@@ -472,16 +470,12 @@ class MetaMultiTaskTrainer():
         only_pos_reg = self._only_pos_reg
         max_sim_grad_norm = self._max_sim_grad_norm
         approx_term = self._approx_term
-        share = 1 # TODO(Alex): make this an option
-        if share: # only optimize shared params
-            params = [p for n, p in self._model.sent_encoder.named_parameters() \
-                      if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
-            need_grad_params = params
-            need_grad_idxs = [i for i, (n, p) in enumerate(self._model.sent_encoder.named_parameters()) \
-                      if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
-
-        else:
-            params = [p for p in self._model.parameters() if p.requires_grad]
+        # TODO(Alex): cleanup
+        params = [p for n, p in self._model.sent_encoder.named_parameters() \
+                  if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
+        need_grad_params = params
+        need_grad_idxs = [i for i, (n, p) in enumerate(self._model.sent_encoder.named_parameters()) \
+                  if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
         model = self._model
         mdl_cpy = self._model_copy
 
@@ -568,22 +562,6 @@ class MetaMultiTaskTrainer():
                     trg_task_info['loss'] += trg_loss
                     src_task_info['loss'] += src_loss
 
-                    # TODO(Alex): debugging
-                    #self._model.eval()
-                    #src_out2 = self._model(src_task, src_batch)
-                    #trg_out2 = self._model(src_task, trg_batch)
-                    #trg_grads2 = autograd.grad(trg_out2['loss'], params, create_graph=True,
-                    #                          allow_unused=True)
-                    #src_grads2 = autograd.grad(src_out2['loss'], params, create_graph=True,
-                    #                          allow_unused=True)
-                    #trg_grads_flat2 = torch.cat([t.view(-1) for t, s in zip(trg_grads2, src_grads2) if s is not None and t is not None])
-                    #src_grads_flat2 = torch.cat([s.view(-1) for t, s in zip(trg_grads2, src_grads2) if s is not None and t is not None])
-                    #trg_norm2 = trg_grads_flat2.norm() + EPS
-                    #src_norm2 = src_grads_flat2.norm() + EPS
-                    #grad_prod2 = torch.dot(trg_grads_flat2, src_grads_flat2)
-                    #self._model.train()
-                    #ipdb.set_trace()
-
                 else: # exact case
                     org_params = [p for p in model.parameters()] # TODO(AW): probably redundant
                     #need_grad_params = [p for n, p in org_params if filter_params(n, p)]
@@ -595,12 +573,12 @@ class MetaMultiTaskTrainer():
                     # gather the model copy gradients and backwards propagate them
                     # NOTE(AW): I'm pretty sure the autograd.grad calls don't need create_graph b/c I already
                     #           created graph on the backwards calls
+                    mdl_cpy.zero_grad()
                     param_cands, sim_src_out, sim_src_grads = simulate_sgd(model, need_grad_params, src_task, src_batch, sim_lr=sim_lr)
                     tmp = [p for p in org_params]
                     for j, i in enumerate(need_grad_idxs):
                         tmp[i] = param_cands[j]
                     set_model_params(mdl_cpy, tmp)
-                    mdl_cpy.zero_grad()
                     trg_out = mdl_cpy(trg_task, trg_batch)
                     trg_out['loss'].backward(create_graph=True, retain_graph=True)
 
@@ -610,6 +588,21 @@ class MetaMultiTaskTrainer():
                     src_grads = autograd.grad(param_cands_w_grad, need_grad_params,
                                               grad_outputs=cpy_grads_nonnone, create_graph=False,
                                               allow_unused=True)
+
+                    # assign the grads of the clone to the original gradients
+                    for i, j in enumerate(need_grad_idxs):
+                        if src_grads[i] is not None:
+                            if org_params[j].grad is None:
+                                org_params[j].grad = src_grads[i]
+                            else:
+                                org_params[j].grad += src_grads[i]
+                        if multistep_loss:
+                            # the sim loss is calculated using original model
+                            # so this should add gradient wrt sim loss
+                            # to the existing gradients
+                            if sim_src_grads[i] is not None:
+                                org_params[j].grad += sim_src_grads[i] * multistep_scale
+
 
                     # do the same thing with the tasks flipped
                     param_cands, sim_trg_out, sim_trg_grads = simulate_sgd(model, need_grad_params, trg_task, trg_batch, sim_lr=sim_lr)
@@ -629,11 +622,6 @@ class MetaMultiTaskTrainer():
 
                     # assign the grads of the clone to the original gradients
                     for i, j in enumerate(need_grad_idxs):
-                        if src_grads[i] is not None:
-                            if org_params[j].grad is None:
-                                org_params[j].grad = src_grads[i]
-                            else:
-                                org_params[j].grad += src_grads[i]
                         if trg_grads[i] is not None:
                             if org_params[j].grad is None:
                                 org_params[j].grad = trg_grads[i]
@@ -646,29 +634,12 @@ class MetaMultiTaskTrainer():
                             # to the existing gradients
                             if sim_trg_grads[i] is not None:
                                 org_params[j].grad += sim_trg_grads[i] * multistep_scale
-                            if sim_src_grads[i] is not None:
-                                org_params[j].grad += sim_src_grads[i] * multistep_scale
 
                     trg_loss = trg_out['loss'].item()
                     src_loss = src_out['loss'].item()
                     trg_task_info['loss'] += trg_loss
                     src_task_info['loss'] += src_loss
                     loss = trg_loss + src_loss
-
-                #if torch.isnan(loss).any():
-                #    ipdb.set_trace()
-                #if sum([torch.isnan(p.grad).any().item() for p in params]):
-                #    ipdb.set_trace()
-                #assert_for_log(not torch.isnan(loss).any(), "NaNs in loss.")
-
-                # Ignore loss scaling for now
-                #if scaling_method == 'unit' and weighting_method == 'proportional':
-                #    loss /= src_task_info['n_tr_batches']
-                #elif scaling_method == 'max' and weighting_method == 'proportional':
-                #    loss *= (max_weight / src_task_info['n_tr_batches'])
-                #elif scaling_method == 'min' and weighting_method == 'proportional':
-                #    loss *= (min_weight / src_task_info['n_tr_batches'])
-
 
                 # Gradient regularization and application
                 if self._max_grad_norm:

@@ -92,7 +92,10 @@ def build_model(args, vocab, pretrained_embs, tasks):
     elif args.sent_enc == 'convlm':
         if args.elmo:
             assert_for_log(args.elmo_chars_only, "LM with full ELMo not supported")
-        shared_enc = FConvDecoder(vocab, d_emb)
+        convolutions = eval(args.conv_layers) if args.conv_layers else ((512, 3),) * 20
+        shared_enc = FConvDecoder(vocab, input_dim=d_emb, output_dim=d_sent,
+                                  convolutions=convolutions,
+                                  dropout=args.dropout)
         log.info("Using ConvLM architecture for shared encoder!")
     elif args.sent_enc == 'rnn':
         shared_enc = s2s_e.by_name('lstm').from_params(copy.deepcopy(rnn_params))
@@ -109,7 +112,9 @@ def build_model(args, vocab, pretrained_embs, tasks):
         d_sent = 0  # skip connection added below
         log.info("No shared encoder (just using word embeddings)!")
     elif args.sent_enc == 'conv':
-        shared_enc = FConvEncoder(vocab, input_dim=d_emb, output_dim=d_sent)
+        convolutions = eval(args.conv_layers) if args.conv_layers else ((512, 3),) * 20
+        shared_enc = FConvEncoder(vocab, input_dim=d_emb, output_dim=d_sent,
+                                  convolutions=convolutions, dropout=args.dropout)
         log.info("Using convolution architecture for shared encoder!")
     elif args.sent_enc == 'bow':
         pass

@@ -149,13 +149,6 @@ class FConvEncoder(nn.Module):
         # self.num_attention_layers in their code is set by the overall FConvModel
         #x = GradMultiply.apply(x, 1.0 / (2.0 * self.num_attention_layers))
 
-        # add output to input embedding for attention
-        #y = (x + input_embedding) * math.sqrt(0.5)
-
-        #return {
-        #    'encoder_out': (x, y),
-        #    'encoder_padding_mask': encoder_padding_mask,  # B x T
-        #}
         return x
 
     def reorder_encoder_out(self, encoder_out, new_order):
@@ -180,7 +173,6 @@ class FConvEncoder(nn.Module):
         return self.input_dim # gets projected back to inp dim
 
 
-#class FConvDecoder(FairseqIncrementalDecoder):
 class FConvDecoder(nn.Module):
     """Convolutional decoder"""
 
@@ -225,7 +217,6 @@ class FConvDecoder(nn.Module):
 
         self.fc2 = Linear(in_channels, output_dim)
 
-    #def forward(self, prev_output_tokens, encoder_out_dict=None, incremental_state=None):
     def forward(self, tok_embs, src_masks):
         """
 
@@ -243,33 +234,36 @@ class FConvDecoder(nn.Module):
         src_embs = F.dropout(src_embs, p=self.dropout, training=self.training)
 
         # project to size of convolution
-        x = self.fc1(src_embs)
+        preconv = self.fc1(src_embs)
 
         # B x T x C -> B x C x T
-        x = x.transpose(1, 2)
+        rec = preconv.transpose(1, 2)
 
         # temporal convolutions
-        residuals = [x]
+        residuals = [rec]
         for proj, conv, res_layer in zip(self.projections, self.convolutions, self.residuals):
             if res_layer > 0:
                 residual = residuals[-res_layer]
-                residual = residual if proj is None else proj(residual)
+                residual = residual if proj is None else proj(residual.transpose(1, 2)).transpose(1, 2)
             else:
                 residual = None
 
-            x = F.dropout(x, p=self.dropout, training=self.training)
-            x = conv(x)[:,:, :-conv.padding[0]] # need to drop future steps
-            x = F.glu(x, dim=1)
+            preconv = F.dropout(rec, p=self.dropout, training=self.training)
+            postconv = conv(preconv)
+            if conv.padding[0]: # need to drop future steps when padded
+                postconv = postconv[:, :, :-conv.padding[0]]
+            conv_out = F.glu(postconv, dim=1)
 
             # residual
             if residual is not None:
-                x = (x + residual) * math.sqrt(0.5)
-            residuals.append(x)
+                block_out = (conv_out + residual) * math.sqrt(0.5)
+            residuals.append(block_out)
+            rec = block_out
 
         # B x C x T -> B x T x C
-        x = x.transpose(2, 1)
-        x = self.fc2(x)
-        return x
+        rec = rec.transpose(2, 1)
+        final_out = self.fc2(rec)
+        return final_out
 
     def max_positions(self):
         """Maximum output length supported by the decoder."""
@@ -345,15 +339,6 @@ def Linear(in_features, out_features, dropout=0):
     nn.init.normal_(m.weight, mean=0, std=math.sqrt((1 - dropout) / in_features))
     nn.init.constant_(m.bias, 0)
     return nn.utils.weight_norm(m)
-
-
-def LinearizedConv1d(in_channels, out_channels, kernel_size, dropout=0, **kwargs):
-    """Weight-normalized Conv1d layer optimized for decoding"""
-    m = LinearizedConvolution(in_channels, out_channels, kernel_size, **kwargs)
-    std = math.sqrt((4 * (1.0 - dropout)) / (m.kernel_size[0] * in_channels))
-    nn.init.normal_(m.weight, mean=0, std=std)
-    nn.init.constant_(m.bias, 0)
-    return nn.utils.weight_norm(m, dim=2)
 
 
 def Conv1d(in_channels, out_channels, kernel_size, dropout=0, **kwargs):
