@@ -29,6 +29,8 @@ from . import config
 from . import utils
 from . import functionize
 
+import ipdb
+
 N_EXS_IN_MEMORY = 100000
 EPS = 1e-5
 
@@ -43,7 +45,8 @@ def build_trainer_params(args, task_names):
                   'task_patience', 'patience',
                   'scheduler_threshold', 'scheduler',
                   'sim_lr', 'max_sim_grad_norm',
-                  'slow_params_approx', 'only_pos_reg', 'approx_term']
+                  'slow_params_approx', 'only_pos_reg', 'approx_term',
+                  'one_sided_update']
 
     # we want to pass to the build_train()
     extra_opts = ['sent_enc', 'd_hid', 'warmup',
@@ -130,7 +133,8 @@ def build_trainer(params, model, model_copy, run_dir, metric_should_decrease=Tru
                            'sim_lr': params['sim_lr'],
                            'max_sim_grad_norm': params['max_sim_grad_norm'],
                            'slow_params_approx': params['slow_params_approx'],
-                           'only_pos_reg': params['only_pos_reg'], 'approx_term': params['approx_term']})
+                           'only_pos_reg': params['only_pos_reg'], 'approx_term': params['approx_term'],
+                           'one_sided_update': params['one_sided_update']})
     trainer = MetaMultiTaskTrainer.from_params(model, model_copy, run_dir,
                                                copy.deepcopy(train_params))
     return trainer, train_params, opt_params, schd_params
@@ -172,7 +176,8 @@ class MetaMultiTaskTrainer():
                  keep_all_checkpoints=False, val_data_limit=5000,
                  dec_val_scale=100, training_data_fraction=1.0,
                  sim_lr=0.001, max_sim_grad_norm=5.,
-                 slow_params_approx=0, only_pos_reg=0, approx_term=0):
+                 slow_params_approx=0, only_pos_reg=0, approx_term=0,
+                 one_sided_update=0):
         """
         The training coordinator. Unusually complicated to handle MTL with tasks of
         diverse sizes.
@@ -230,6 +235,7 @@ class MetaMultiTaskTrainer():
         self._slow_params_approx = slow_params_approx
         self._only_pos_reg = only_pos_reg
         self._approx_term = approx_term
+        self._one_sided_update = one_sided_update
         self._keep_all_checkpoints = keep_all_checkpoints
         self._val_data_limit = val_data_limit
         self._dec_val_scale = dec_val_scale
@@ -466,18 +472,11 @@ class MetaMultiTaskTrainer():
                                self._serialization_dir)
 
         sample_weights = self._setup_task_weighting(weighting_method, tasks)
-
-        only_pos_reg = self._only_pos_reg
-        max_sim_grad_norm = self._max_sim_grad_norm
-        approx_term = self._approx_term
-        # TODO(Alex): cleanup
-        params = [p for n, p in self._model.sent_encoder.named_parameters() \
-                  if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
-        need_grad_params = params
-        need_grad_idxs = [i for i, (n, p) in enumerate(self._model.sent_encoder.named_parameters()) \
-                  if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
         model = self._model
-        mdl_cpy = self._model_copy
+        self._all_params = [p for p in self._model.parameters()]
+        idxs_and_params = [(i, p) for i, (n, p) in enumerate(model.sent_encoder.named_parameters())\
+                           if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
+        self._shared_params_idxs, self._shared_params = zip(*idxs_and_params)
 
         # Sample the tasks to train on. Do it all at once (val_interval) for MAX EFFICIENCY.
         #samples_src = random.choices(tasks, weights=sample_weights, k=validation_interval)
@@ -485,12 +484,11 @@ class MetaMultiTaskTrainer():
         # TODO(Alex): this is a hack to make sure tasks are different each time
         samples_src = [tasks[0] for _ in range(validation_interval)]
         samples_trg = [tasks[1] for _ in range(validation_interval)]
+
         all_tr_metrics = {}
         log.info("Beginning training. Stopping metric: %s", stop_metric)
-        avg_cos_sim = 0.
         while not should_stop:
             self._model.train()
-            #self._model.eval()
             src_task = samples_src[n_update % (validation_interval)]
             trg_task = samples_trg[n_update % (validation_interval)]
             src_task_info = task_infos[src_task.name]
@@ -506,140 +504,50 @@ class MetaMultiTaskTrainer():
                 trg_task_info['n_batches_since_val'] += 1
                 src_task_info['total_batches_trained'] += 1
                 trg_task_info['total_batches_trained'] += 1
-                n_update += 2  # update per batch
+                n_update += 2 # update per batch
                 optimizer.zero_grad()
 
                 ### START DOING META STUFF ###
-                # 1) Get a batch from each task
-                # 2) Get candidate parameters by simulating SGD update using the src batch
-                # 3) Calculate loss on the trg batch using the candidate parameters
-
                 if slow_params_approx: # assume cand_params ~= params
                     trg_out = self._model(trg_task, trg_batch)
                     src_out = self._model(src_task, src_batch)
-                    #trg_out = self._model(src_task, trg_batch)
-                    trg_grads = autograd.grad(trg_out['loss'], params, create_graph=True,
-                                              allow_unused=True)
-                    src_grads = autograd.grad(src_out['loss'], params, create_graph=True,
-                                              allow_unused=True)
-                    trg_grads_flat = torch.cat([t.view(-1) for t, s in zip(trg_grads, src_grads) if s is not None and t is not None])
-                    src_grads_flat = torch.cat([s.view(-1) for t, s in zip(trg_grads, src_grads) if s is not None and t is not None])
-                    trg_norm = trg_grads_flat.norm() + EPS
-                    src_norm = src_grads_flat.norm() + EPS
+                    trg_grads = self._get_gradient(trg_out['loss'], self._shared_params)
+                    src_grads = self._get_gradient(src_out['loss'], self._shared_params)
 
-                    grad_prod = torch.dot(trg_grads_flat, src_grads_flat)
-                    if only_pos_reg: # if grad_prod is negative, it's added to loss and that's ok
-                        grad_prod = torch.max(grad_prod, 0.)
-                    cos_sim = grad_prod / (trg_norm * src_norm)
-                    avg_cos_sim += cos_sim.item()
-                    if approx_term == 'cos_sim':
-                        grad_prod = cos_sim
-                    elif approx_term == 'sign_cos_sim':
-                        grad_prod = torch.sign(cos_sim)
-                    elif approx_term == 'dot_product':
-                        # grad_prod is already dot product
-                        if max_sim_grad_norm is not None and trg_norm > max_sim_grad_norm:
-                            grad_prod = (max_sim_grad_norm / trg_norm) * grad_prod
-                        if max_sim_grad_norm is not None and src_norm > max_sim_grad_norm:
-                            grad_prod = (max_sim_grad_norm / src_norm) * grad_prod
-                    elif approx_term == 'only_cos_sim':
-                        pass
-                    else:
-                        raise ValueError("Regularization method %s not found!" % approx_term)
+                    # Get the regularization term, and other stuff for tracking
+                    regularizer, dot_prod, cos_sim, trg_norm, src_norm = \
+                        self._get_approx_regularizer(trg_grads, src_grads)
 
+                    # Loss computation
                     gross_loss = src_out['loss'] + trg_out['loss']
-                    if pseudo_meta:
+                    if pseudo_meta: # TODO(Alex): delete when done
                         loss = gross_loss
                     else:
-                        loss = gross_loss - (sim_lr * grad_prod)
-
-                    if approx_term == 'only_cos_sim': # TODO(Alex): delete when done
+                        loss = gross_loss - (sim_lr * regularizer)
+                    if self._approx_term == 'only_cos_sim':
                         loss = -cos_sim
-
                     loss.backward()
-                    trg_loss = trg_out['loss'].item()
-                    src_loss = src_out['loss'].item()
-                    trg_task_info['loss'] += trg_loss
-                    src_task_info['loss'] += src_loss
 
                 else: # exact case
-                    org_params = [p for p in model.parameters()] # TODO(AW): probably redundant
-                    #need_grad_params = [p for n, p in org_params if filter_params(n, p)]
-                    #need_grad_idxs = [i for i, p in enumerate(org_params) if filter_params(p)]
-
-                    # clone the parameters and create the simulated params
-                    # set the model copy parameters to be the simulated params
-                    # do a forward pass of the model copy and backward to get gradients
-                    # gather the model copy gradients and backwards propagate them
                     # NOTE(AW): I'm pretty sure the autograd.grad calls don't need create_graph b/c I already
                     #           created graph on the backwards calls
-                    mdl_cpy.zero_grad()
-                    param_cands, sim_src_out, sim_src_grads = simulate_sgd(model, need_grad_params, src_task, src_batch, sim_lr=sim_lr)
-                    tmp = [p for p in org_params]
-                    for j, i in enumerate(need_grad_idxs):
-                        tmp[i] = param_cands[j]
-                    set_model_params(mdl_cpy, tmp)
-                    trg_out = mdl_cpy(trg_task, trg_batch)
-                    trg_out['loss'].backward(create_graph=True, retain_graph=True)
+                    src_grads, sim_trg_grads, trg_out = \
+                            self._get_meta_gradients(src_task, src_batch, trg_task, trg_batch)
+                    if not self._one_sided_update:
+                        trg_grads, sim_src_grads, src_out = \
+                                self._get_meta_gradients(trg_task, trg_batch, src_task, src_batch)
+                        gradients = [trg_grads, src_grads]
+                        sim_gradss = [sim_trg_grads, sim_src_grads] if multistep_loss else []
+                    else:
+                        gradients = [src_grads]
+                        sim_gradss = [sim_trg_grads] if multistep_loss else []
+                    self._assign_gradients(gradients, sim_gradss, multistep_scale)
 
-                    cpy_grads = [w.grad for w in mdl_cpy.parameters()] # grads of mdl cpy params
-                    cpy_grads_nonnone = [g for g in cpy_grads if g is not None]
-                    param_cands_w_grad = [p for i, p in enumerate(tmp) if cpy_grads[i] is not None]
-                    src_grads = autograd.grad(param_cands_w_grad, need_grad_params,
-                                              grad_outputs=cpy_grads_nonnone, create_graph=False,
-                                              allow_unused=True)
-
-                    # assign the grads of the clone to the original gradients
-                    for i, j in enumerate(need_grad_idxs):
-                        if src_grads[i] is not None:
-                            if org_params[j].grad is None:
-                                org_params[j].grad = src_grads[i]
-                            else:
-                                org_params[j].grad += src_grads[i]
-                        if multistep_loss:
-                            # the sim loss is calculated using original model
-                            # so this should add gradient wrt sim loss
-                            # to the existing gradients
-                            if sim_src_grads[i] is not None:
-                                org_params[j].grad += sim_src_grads[i] * multistep_scale
-
-
-                    # do the same thing with the tasks flipped
-                    param_cands, sim_trg_out, sim_trg_grads = simulate_sgd(model, need_grad_params, trg_task, trg_batch, sim_lr=sim_lr)
-                    tmp = [p for p in org_params]
-                    for j, i in enumerate(need_grad_idxs):
-                        tmp[i] = param_cands[j]
-                    set_model_params(mdl_cpy, tmp)
-                    mdl_cpy.zero_grad()
-                    src_out = mdl_cpy(src_task, src_batch)
-                    src_out['loss'].backward(create_graph=True, retain_graph=True)
-                    cpy_grads = [w.grad for w in mdl_cpy.parameters()]
-                    cpy_grads_nonnone = [g for g in cpy_grads if g is not None]
-                    param_cands_w_grad = [p for i, p in enumerate(tmp) if cpy_grads[i] is not None]
-                    trg_grads = autograd.grad(param_cands_w_grad, need_grad_params,
-                                              grad_outputs=cpy_grads_nonnone, create_graph=False,
-                                              allow_unused=True)
-
-                    # assign the grads of the clone to the original gradients
-                    for i, j in enumerate(need_grad_idxs):
-                        if trg_grads[i] is not None:
-                            if org_params[j].grad is None:
-                                org_params[j].grad = trg_grads[i]
-                            else:
-                                org_params[j].grad += trg_grads[i]
-
-                        if multistep_loss:
-                            # the sim loss is calculated using original model
-                            # so this should add gradient wrt sim loss
-                            # to the existing gradients
-                            if sim_trg_grads[i] is not None:
-                                org_params[j].grad += sim_trg_grads[i] * multistep_scale
-
-                    trg_loss = trg_out['loss'].item()
-                    src_loss = src_out['loss'].item()
-                    trg_task_info['loss'] += trg_loss
-                    src_task_info['loss'] += src_loss
-                    loss = trg_loss + src_loss
+                trg_loss = trg_out['loss'].item()
+                src_loss = src_out['loss'].item()
+                trg_task_info['loss'] += trg_loss
+                src_task_info['loss'] += src_loss
+                loss = trg_loss + src_loss
 
                 # Gradient regularization and application
                 if self._max_grad_norm:
@@ -654,10 +562,8 @@ class MetaMultiTaskTrainer():
             if time.time() - src_task_info['last_log'] > self._log_interval:
                 src_task_metrics = src_task.get_metrics()
                 trg_task_metrics = trg_task.get_metrics()
-                #trg_task_metrics = src_task.get_metrics()
                 src_nbsv = src_task_info['n_batches_since_val']
                 trg_nbsv = trg_task_info['n_batches_since_val']
-                log.info("AVERAGE COS SIM: %.5f", avg_cos_sim / src_nbsv) # TODO(Alex): debugging
 
                 src_task_metrics["%s_loss" % src_task.name] = src_task_info['loss'] / src_nbsv
                 trg_task_metrics["%s_loss" % trg_task.name] = trg_task_info['loss'] / trg_nbsv
@@ -671,10 +577,10 @@ class MetaMultiTaskTrainer():
                     log.info("\tnet loss: %.3f, src loss: %.3f, trg loss: %.3f", loss, src_loss, trg_loss)
                     if pseudo_meta:
                         log.info("\tgross loss: %.3f", gross_loss)
-                    log.info("\tgrad regularizer: %.5f, cos_sim: %.5f", grad_prod, cos_sim)
+                    log.info("\tgrad regularizer: %.5f, cos_sim: %.5f", regularizer, cos_sim)
                     log.info("\tgrad1 norm: %.3f, grad2 norm: %.3f", src_norm, trg_norm)
                     self._tb_writers["gross_loss"].add_scalar("approx/loss", gross_loss, n_update)
-                    self._tb_writers["grad"].add_scalar("approx/grad_prod", grad_prod, n_update)
+                    self._tb_writers["grad"].add_scalar("approx/grad_prod", regularizer, n_update)
                     self._tb_writers["net_loss"].add_scalar("approx/loss", loss, n_update)
                     self._tb_writers["grad"].add_scalar("approx/cos_sim", cos_sim, n_update)
                     self._tb_writers["grad1"].add_scalar("approx/grad_mag", src_norm, n_update)
@@ -685,6 +591,7 @@ class MetaMultiTaskTrainer():
 
 
                 if self._tb_writers is not None:
+                    # TODO(Alex): I don't know why we need to copy
                     src_task_metrics_to_tb = src_task_metrics.copy()
                     src_task_metrics_to_tb["loss"] = float(src_task_info['loss'] / src_nbsv)
                     self._write_tensorboard(n_update, src_task_metrics_to_tb, src_task.name)
@@ -704,7 +611,6 @@ class MetaMultiTaskTrainer():
                 # Dump and log all of our current info
                 epoch = int(n_update / validation_interval)
                 log.info("***** Pass %d / Epoch %d *****", n_update, epoch)
-                log.info("AVERAGE COS SIM: %.5f", (2 * avg_cos_sim / validation_interval)) # TODO(Alex): debugging
                 # Get metrics for all training progress so far
                 for task in tasks:
                     task_info = task_infos[task.name]
@@ -900,6 +806,101 @@ class MetaMultiTaskTrainer():
                 log.info("\t# bad epochs: %d", scheduler.lr_scheduler.num_bad_epochs)
 
         return all_val_metrics, should_save, new_best_macro
+
+    def _get_gradient(self, loss, params):
+        """ Explicitly get gradient of loss """
+
+        grads = autograd.grad(loss, params, create_graph=True, allow_unused=True)
+        grads_flat = torch.cat([g.view(-1) for g in grads if g is not None])
+        return grads_flat
+
+    def _get_approx_regularizer(self, grad1, grad2):
+        """ Compute the regularization term in the slow-params approx setting """
+        approx_term = self._approx_term
+        dot_prod = torch.dot(grad1, grad2)
+        norm1 = grad1.norm() + EPS
+        norm2 = grad2.norm() + EPS
+
+        if self._only_pos_reg: # if grad_prod is negative, it's added to loss and that's ok
+            regularizer = torch.max(dot_prod, 0.)
+        cos_sim = dot_prod / (norm1 * norm2)
+        if approx_term == 'cos_sim':
+            regularizer = cos_sim
+        elif approx_term == 'sign_cos_sim':
+            regularizer = torch.sign(cos_sim)
+        elif approx_term == 'dot_product':
+            # grad_prod is already dot product
+            max_sim_grad_norm = self._max_sim_grad_norm
+            if max_sim_grad_norm is not None and norm1 > max_sim_grad_norm:
+                regularizer = (max_sim_grad_norm / norm1) * dot_prod
+            if max_sim_grad_norm is not None and norm2 > max_sim_grad_norm:
+                regularizer = (max_sim_grad_norm / norm2) * dot_prod
+        elif approx_term == 'only_cos_sim':
+            pass
+        else:
+            raise ValueError("Regularization method %s not found!" % approx_term)
+        return regularizer, dot_prod, cos_sim, norm1, norm2
+
+    def _get_meta_gradients(self, task1, batch1, task2, batch2):
+        """ """
+        model = self._model
+        model_copy = self._model_copy
+        shared_params = self._shared_params
+        shared_params_idxs = self._shared_params_idxs
+        model_copy.zero_grad()
+
+        # clone the parameters and create the simulated params
+        cand_params, sim_out, sim_grads = \
+            simulate_sgd(model, shared_params, task1, batch1, sim_lr=self._sim_lr)
+        all_cand_params = [p for p in self._all_params]
+        for j, i in enumerate(shared_params_idxs):
+            all_cand_params[i] = cand_params[j]
+
+        # set the model copy parameters to be the simulated params
+        set_model_params(model_copy, all_cand_params)
+
+        # do a forward pass of the model copy and backward to get gradients
+        out = model_copy(task2, batch2)
+        out['loss'].backward(create_graph=True, retain_graph=True)
+
+        # gather the model copy gradients and backwards propagate them
+        cpy_grads = [w.grad for w in model_copy.parameters()] # grads of mdl cpy params
+        cpy_grads_nonnone = [g for g in cpy_grads if g is not None]
+        cand_params_w_grad = [p for i, p in enumerate(all_cand_params) if cpy_grads[i] is not None]
+        # differentiate candidate params w/ gradient WRT original params that need gradient
+        # this will do a continuation of derivative of loss WRT original params
+        meta_grads = autograd.grad(cand_params_w_grad, shared_params,
+                                   grad_outputs=cpy_grads_nonnone, create_graph=False,
+                                   allow_unused=True)
+        return meta_grads, sim_grads, out
+
+    def _assign_gradients(self, grads, sim_gradss, multistep_scale):
+        """ Assign gradients and pssible simulated gradients
+        to the original parameters
+
+        args:
+            - gradss (List[List[torch.Tensor]]): list of gradients to assign for each task
+            - sim_grads (List[List[List[torch.Tensor]]]):
+                list of gradients for each simulated SGD step (earliest step first) for each task
+            - step_scale (float): multiplicative discount rate to apply
+                based on the SGD step
+
+        returns: (none)
+        """
+        # TODO(Alex): should add an assert here that lengths are correct
+        for i, j in enumerate(self._shared_params_idxs):
+            cur_grad = self._all_params[j].grad
+            for grad in grads:
+                if grad[i] is not None:
+                    cur_grad = grad[i] if cur_grad is None else cur_grad + grad[i]
+
+            for sim_grads in sim_gradss:
+                for step_n, sim_grad in enumerate(sim_grads):
+                    if sim_grads[i] is not None:
+                        to_assign = sim_grads[i] * pow(multistep_scale, step_n + 1)
+                        cur_grad = to_assign if cur_grad is None else cur_grad + to_assign
+
+        return
 
     def _get_lr(self):
         ''' Get learning rate from the optimizer we're using '''
@@ -1188,7 +1189,8 @@ class MetaMultiTaskTrainer():
         max_sim_grad_norm = params.pop("max_sim_grad_norm", None)
         slow_params_approx = params.pop("slow_params_approx", 0)
         only_pos_reg = params.pop("only_pos_reg", 0)
-        approx_term = params.pop("approx_term", 0)
+        approx_term = params.pop("approx_term", "cos_sim")
+        one_sided_update = params.pop("one_sided_update", 0)
 
         params.assert_empty(cls.__name__)
         return MetaMultiTaskTrainer(model, model_copy, patience=patience,
@@ -1202,4 +1204,4 @@ class MetaMultiTaskTrainer():
                                     training_data_fraction=training_data_fraction,
                                     sim_lr=sim_lr, max_sim_grad_norm=max_sim_grad_norm,
                                     slow_params_approx=slow_params_approx, only_pos_reg=only_pos_reg,
-                                    approx_term=approx_term)
+                                    approx_term=approx_term, one_sided_update=one_sided_update)
