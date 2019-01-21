@@ -10,7 +10,6 @@ import logging as log
 import itertools
 
 import torch
-import torch.nn as nn
 import torch.autograd as autograd
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.nn.utils.clip_grad import clip_grad_norm_
@@ -22,93 +21,24 @@ from allennlp.data.iterators import BasicIterator, BucketIterator  # pylint: dis
 from allennlp.training.learning_rate_schedulers import LearningRateScheduler  # pylint: disable=import-error
 from allennlp.training.optimizers import Optimizer  # pylint: disable=import-error
 
-from .utils import device_mapping, assert_for_log, \
-        stop_on_nan_hook, template_print_norm_hook
+from .utils import device_mapping, assert_for_log, stop_on_nan_hook
 from .evaluate import evaluate
 from . import config
 from . import utils
-from . import functionize
-
-import ipdb
+from .trainer import build_optimizer_params, build_scheduler_params
 
 N_EXS_IN_MEMORY = 100000
 EPS = 1e-5
 
-def build_trainer_params(args, task_names):
-    ''' In an act of not great code design, we wrote this helper function which
-    extracts trainer parameters from args. In particular, we want to search args
-    for task specific training parameters. '''
-    _get_task_attr = lambda attr_name: config.get_task_attr(args, task_names,
-                                                            attr_name)
-    params = {}
-    train_opts = ['optimizer', 'lr', 'batch_size', 'lr_decay_factor',
-                  'task_patience', 'patience',
-                  'scheduler_threshold', 'scheduler',
-                  'sim_lr', 'max_sim_grad_norm',
-                  'slow_params_approx', 'only_pos_reg', 'approx_term',
-                  'one_sided_update']
-
-    # we want to pass to the build_train()
-    extra_opts = ['sent_enc', 'd_hid', 'warmup',
-                  'max_grad_norm', 'min_lr', 'batch_size',
-                  'cuda', 'keep_all_checkpoints',
-                  'val_data_limit', 'training_data_fraction']
-    for attr in train_opts:
-        params[attr] = _get_task_attr(attr)
-    for attr in extra_opts:
-        params[attr] = getattr(args, attr)
-    params['max_vals'] = _get_task_attr('max_vals')
-    params['val_interval'] = _get_task_attr('val_interval')
-    params['dec_val_scale'] = _get_task_attr('dec_val_scale')
-
-    return Params(params)
-
-def build_optimizer(params):
-    ''' Build optimizer params '''
-    opt_params = {'type': params['optimizer'], 'lr': params['lr'], 'weight_decay': 0}
-    if params['optimizer'] == 'adam':
-        # AMSGrad is a flag variant of Adam, not its own object.
-        opt_params['amsgrad'] = True
-    return Params(opt_params)
-
-def build_scheduler(params, should_decrease=True):
-    ''' Build scheduler params '''
-    schd_type = params['scheduler']
-    if 'transformer' in params['sent_enc'] or schd_type == 'noam':
-        assert False, "Transformer is not yet tested, still in experimental stage :-("
-        schd_params = Params({'type': schd_type,
-                              'model_size': params['d_hid'],
-                              'warmup_steps': params['warmup'],
-                              'factor': 1.0})
-        log.info('\tUsing noam scheduler with warmup %d!', params['warmup'])
-    elif schd_type == 'cosine':
-        # TODO(Alex): lots of other parameters to set
-        schd_params = Params({'type': schd_type,
-                              'T_max': params['max_vals']
-                             })
-        log.info('\tUsing cosine scheduler!')
-    elif schd_type == 'reduce_on_plateau':
-        schd_params = Params({'type': schd_type,
-                              'mode': 'min' if should_decrease else 'max',
-                              'factor': params['lr_decay_factor'],
-                              'patience': params['task_patience'],
-                              'threshold': params['scheduler_threshold'],
-                              'threshold_mode': 'abs',
-                              'verbose': True})
-        log.info('\tUsing ReduceLROnPlateau scheduler!')
-    else:
-        raise ValueError("Scheduler %s not supported!" % schd_type)
-
-    return schd_params
-
-
-def build_trainer(params, model, model_copy, run_dir, metric_should_decrease=True):
+def build_trainer(args, task_names, run_dir, metric_should_decrease=True):
     '''Build a trainer from params.
 
     Parameters
     ----------
-    args: A trainer config object.
+    args:  argument object containing all config options
+    task_names: tasks for which we want to extract task specific params
     model: A module with trainable parameters.
+    model_copy: A module with trainable parameters.
     max_vals: The upper bound on training steps, specified in number of validation runs.
 
     Returns
@@ -116,28 +46,31 @@ def build_trainer(params, model, model_copy, run_dir, metric_should_decrease=Tru
     A trainer object, a trainer config object, an optimizer config object,
         and a scheduler config object.
     '''
+    _get_task_attr = lambda attr_name: config.get_task_attr(args, task_names, attr_name)
+    opt_params = build_optimizer_params(args)
+    schd_params = build_scheduler_params(args, metric_should_decrease)
 
-    opt_params = build_optimizer(params)
-    schd_params = build_scheduler(params, metric_should_decrease)
-
-    train_params = Params({'cuda_device': params['cuda'],
-                           'patience': params['patience'],
-                           'max_grad_norm': params['max_grad_norm'],
-                           'val_interval': params['val_interval'],
-                           'max_vals': params['max_vals'],
-                           'lr_decay': .99, 'min_lr': params['min_lr'],
-                           'keep_all_checkpoints': params['keep_all_checkpoints'],
-                           'val_data_limit': params['val_data_limit'],
-                           'dec_val_scale': params['dec_val_scale'],
-                           'training_data_fraction': params['training_data_fraction'],
-                           'sim_lr': params['sim_lr'],
-                           'max_sim_grad_norm': params['max_sim_grad_norm'],
-                           'slow_params_approx': params['slow_params_approx'],
-                           'only_pos_reg': params['only_pos_reg'], 'approx_term': params['approx_term'],
-                           'one_sided_update': params['one_sided_update']})
-    trainer = MetaMultiTaskTrainer.from_params(model, model_copy, run_dir,
-                                               copy.deepcopy(train_params))
-    return trainer, train_params, opt_params, schd_params
+    trainer = MetaMultiTaskTrainer(opt_params=opt_params,
+                                   schd_params=schd_params,
+                                   patience=_get_task_attr('patience'),
+                                   val_interval=_get_task_attr('val_interval'),
+                                   max_vals=_get_task_attr('max_vals'),
+                                   serialization_dir=run_dir,
+                                   cuda_device=_get_task_attr('cuda'),
+                                   max_grad_norm=_get_task_attr('max_grad_norm'),
+                                   lr_decay=_get_task_attr('lr_decay_factor'),
+                                   min_lr=_get_task_attr('min_lr'),
+                                   keep_all_checkpoints=_get_task_attr('keep_all_checkpoints'),
+                                   val_data_limit=_get_task_attr('val_data_limit'),
+                                   dec_val_scale=_get_task_attr('dec_val_scale'),
+                                   training_data_fraction=_get_task_attr('training_data_fraction'),
+                                   sim_lr=_get_task_attr('sim_lr'),
+                                   max_sim_grad_norm=_get_task_attr('max_sim_grad_norm'),
+                                   slow_params_approx=_get_task_attr('slow_params_approx'),
+                                   only_pos_reg=_get_task_attr('only_pos_reg'),
+                                   approx_term=_get_task_attr('approx_term'),
+                                   one_sided_update=_get_task_attr('one_sided_update'))
+    return trainer
 
 
 def simulate_sgd(model, params, task, batch, sim_lr=0.01, n_steps=1):
@@ -170,7 +103,8 @@ def set_model_params(model, params):
 
 
 class MetaMultiTaskTrainer():
-    def __init__(self, model, model_copy, patience=2, val_interval=100, max_vals=50,
+    def __init__(self, opt_params, schd_params,
+                 patience=2, val_interval=100, max_vals=50,
                  serialization_dir=None, cuda_device=-1,
                  max_grad_norm=None, lr_decay=None, min_lr=None,
                  keep_all_checkpoints=False, val_data_limit=5000,
@@ -219,8 +153,8 @@ class MetaMultiTaskTrainer():
         training_data_fraction: If set to a float in [0, 1], load only the specified percentage
             of examples. Hashing is used to ensure that the same examples are loaded each epoch.
         """
-        self._model = model
-        self._model_copy = model_copy
+        self._opt_params = opt_params
+        self._schd_params = schd_params
 
         self._patience = patience
         self._max_vals = max_vals
@@ -246,8 +180,6 @@ class MetaMultiTaskTrainer():
 
         self._log_interval = 10  # seconds
         self._summary_interval = 10  # num batches between log to tensorboard
-        if self._cuda_device >= 0:
-            self._model = self._model.cuda(self._cuda_device)
 
         self._tb_writers = None
         if self._serialization_dir is not None:
@@ -261,31 +193,7 @@ class MetaMultiTaskTrainer():
                 self._tb_writers["grad1"] = SummaryWriter(os.path.join(tb_dir, "grad1"))
                 self._tb_writers["grad2"] = SummaryWriter(os.path.join(tb_dir, "grad2"))
 
-    def _check_history(self, metric_history, cur_score, should_decrease=False):
-        '''
-        Given a the history of the performance on a metric
-        and the current score, check if current score is
-        best so far and if out of patience.
-        '''
-        patience = self._patience + 1
-        best_fn = min if should_decrease else max
-        best_score = best_fn(metric_history)
-        if best_score == cur_score:
-            best_so_far = metric_history.index(best_score) == len(metric_history) - 1
-        else:
-            best_so_far = False
-
-        out_of_patience = False
-        if should_decrease:
-            index_of_last_improvement = metric_history.index(min(metric_history))
-            out_of_patience = index_of_last_improvement <= len(metric_history) - (patience + 1)
-        else:
-            index_of_last_improvement = metric_history.index(max(metric_history))
-            out_of_patience = index_of_last_improvement <= len(metric_history) - (patience + 1)
-
-        return best_so_far, out_of_patience
-
-    def _setup_training(self, tasks, batch_size, train_params, optimizer_params, scheduler_params, phase):
+    def _setup_task_tracking(self, tasks, batch_size, params_to_train, shared_optimizer, phase):
         ''' Set up the trainer by initializing task_infos and metric_infos, which
         track necessary information about the training status of each task and metric respectively.
 
@@ -309,6 +217,13 @@ class MetaMultiTaskTrainer():
                 - stopped (Bool): whether or not that metric is stopped or not
                 - best (Tuple(Int, Dict)): information on the best value of that metric and when it happened
         '''
+        if shared_optimizer:
+            g_optimizer = Optimizer.from_params(params_to_train, copy.deepcopy(self._opt_params))
+        # Always have global scheduler that schedules based on overall metric
+        g_scheduler = LearningRateScheduler.from_params(g_optimizer,
+                                                        copy.deepcopy(self._schd_params))
+        self._g_scheduler = g_scheduler
+
         task_infos = {task.name: {} for task in tasks}
         for task in tasks:
             task_info = task_infos[task.name]
@@ -326,25 +241,31 @@ class MetaMultiTaskTrainer():
                                       #padding_noise=0.0, # TODO(Alex): DELETE WHEN DONE
                                       biggest_batch_first=True)
             tr_generator = iterator(task.train_data, num_epochs=None, cuda_device=self._cuda_device)
-
             task_info['iterator'] = iterator
 
             if phase == "main":
-                # Warning: This won't be precise when training_data_fraction is set, since each example is included
-                #   or excluded independantly using a hashing function. Fortunately, it doesn't need to be.
+                # Warning: This won't be precise when training_data_fraction is set,
+                #   since each example is included
+                #   or excluded independantly using a hashing function.
+                #   Fortunately, it doesn't need to be.
                 task_info['n_tr_batches'] = math.ceil(task.n_train_examples * self._training_data_fraction / batch_size)
             else:
                 task_info['n_tr_batches'] = math.ceil(task.n_train_examples / batch_size)
 
             task_info['tr_generator'] = tr_generator
             task_info['loss'] = 0.0
-            #task_info['sim_loss'] = 0.0
             task_info['total_batches_trained'] = 0
             task_info['n_batches_since_val'] = 0
-            task_info['optimizer'] = Optimizer.from_params(train_params,
-                                                           copy.deepcopy(optimizer_params))
-            task_info['scheduler'] = LearningRateScheduler.from_params(
-                task_info['optimizer'], copy.deepcopy(scheduler_params))
+
+            if not shared_optimizer:
+                task_info['optimizer'] = Optimizer.from_params(params_to_train,
+                                                               copy.deepcopy(self._opt_params))
+                task_info['scheduler'] = LearningRateScheduler.from_params(
+                    task_info['optimizer'], copy.deepcopy(self._schd_params))
+            else:
+                task_info['optimizer'] = g_optimizer
+                task_info['scheduler'] = g_scheduler
+
             task_info['stopped'] = False
             task_info['last_log'] = time.time()
         # Metric bookkeeping
@@ -353,6 +274,8 @@ class MetaMultiTaskTrainer():
                         metric in all_metrics}
         self._task_infos = task_infos
         self._metric_infos = metric_infos
+
+
         return task_infos, metric_infos
 
     def _setup_task_weighting(self, weighting_method, tasks):
@@ -409,10 +332,26 @@ class MetaMultiTaskTrainer():
         log.info("\tnormalized_sample_weights: %s", str(normalized_sample_weights))
         return sample_weights
 
-    def train(self, tasks, stop_metric,
+    def _setup_task_samples(self, tasks, weights, n_samples):
+        """ Get order of task samples
+
+        args:
+            - tasks (List[Task]): list of tasks to sample from
+            - weight
+            - n_samples
+        """
+        #samples_src = random.choices(tasks, weights=sample_weights, k=validation_interval)
+        #samples_trg = random.choices(tasks, weights=sample_weights, k=validation_interval)
+        # TODO(Alex): this is a hack to make sure tasks are different each time
+        samples_src = [tasks[0] for _ in range(n_samples)]
+        samples_trg = [tasks[1] for _ in range(n_samples)]
+        return samples_src, samples_trg
+
+    def train(self, model, model_copy, tasks,
+              stop_metric,
               batch_size, n_batches_per_pass,
               weighting_method, scaling_method,
-              train_params, optimizer_params, scheduler_params,
+              params_to_train,
               shared_optimizer=1, load_model=1, phase="main",
               pseudo_meta=False,
               multistep_loss=False, multistep_scale=.1):
@@ -428,7 +367,7 @@ class MetaMultiTaskTrainer():
         n_batches_per_pass: How many training steps per task per pass.
         weighting_method: How to sample which task to use.
         scaling_method: How to scale gradients.
-        train_params: Trainer config object.
+        params_to_train: Trainer config object.
         optimizer_params: Optimizer config object.
         scheduler_params: Scheduler config object.
         shared_optimizer: Use a single optimizer object for all tasks in MTL. Recommended.
@@ -440,26 +379,24 @@ class MetaMultiTaskTrainer():
         -------
         Validation results
         """
+        if self._cuda_device >= 0:
+            model = model.cuda(self._cuda_device)
+            model_copy = model_copy.cuda(self._cuda_device)
+        self._model = model
+        self._model_copy = model_copy
+
         validation_interval = self._val_interval
         assert_for_log(validation_interval % 2 == 0, "Need an even validation interval!")
-        sim_lr, slow_params_approx = self._sim_lr, self._slow_params_approx
-        task_infos, metric_infos = self._setup_training(tasks, batch_size, train_params,
-                                                        optimizer_params, scheduler_params, phase)
+        self._shared_optimizer = shared_optimizer
+        task_infos, metric_infos = self._setup_task_tracking(tasks, batch_size, params_to_train,
+                                                             shared_optimizer, phase)
 
-        if shared_optimizer: # if shared_optimizer, ignore task_specific optimizers
-            g_optimizer = Optimizer.from_params(train_params, copy.deepcopy(optimizer_params))
-            g_scheduler = LearningRateScheduler.from_params(
-                g_optimizer, copy.deepcopy(scheduler_params))
-        else:
-            g_optimizer, g_scheduler = None, None
-        self._g_optimizer = g_optimizer
-        self._g_scheduler = g_scheduler
-
+        # TODO(Alex): would be nice to factor this out into it's own helper function
         n_update, should_stop = 0, False  # define these here b/c they might get overridden on load
         if self._serialization_dir is not None and phase != "eval":  # Resume from serialization pth
             if load_model and any(
                     ["model_state_" in x for x in os.listdir(self._serialization_dir)]):
-                n_update, should_stop = self._restore_checkpoint()
+                n_update, should_stop = self._restore_checkpoint(model)
                 log.info("Loaded model from checkpoint. Starting at pass %d.", n_update)
             else:
                 log.info("Not loading.")
@@ -471,24 +408,22 @@ class MetaMultiTaskTrainer():
                                "If you don't want them, delete them or change your experiment name." %
                                self._serialization_dir)
 
-        sample_weights = self._setup_task_weighting(weighting_method, tasks)
-        model = self._model
-        self._all_params = [p for p in self._model.parameters()]
+
+        # TODO(Alex): clean this up
+        self._all_params = [p for p in model.parameters()]
         idxs_and_params = [(i, p) for i, (n, p) in enumerate(model.sent_encoder.named_parameters())\
                            if p.requires_grad and not ('_phrase_layer' in n and 'embed' in n)]
         self._shared_params_idxs, self._shared_params = zip(*idxs_and_params)
 
-        # Sample the tasks to train on. Do it all at once (val_interval) for MAX EFFICIENCY.
-        #samples_src = random.choices(tasks, weights=sample_weights, k=validation_interval)
-        #samples_trg = random.choices(tasks, weights=sample_weights, k=validation_interval)
-        # TODO(Alex): this is a hack to make sure tasks are different each time
-        samples_src = [tasks[0] for _ in range(validation_interval)]
-        samples_trg = [tasks[1] for _ in range(validation_interval)]
+        # Sample the tasks to train on.
+        sample_weights = self._setup_task_weighting(weighting_method, tasks)
+        samples_src, samples_trg = self._setup_task_samples(tasks, weights=sample_weights,
+                                                            n_samples=validation_interval)
 
         all_tr_metrics = {}
         log.info("Beginning training. Stopping metric: %s", stop_metric)
         while not should_stop:
-            self._model.train()
+            model.train()
             src_task = samples_src[n_update % (validation_interval)]
             trg_task = samples_trg[n_update % (validation_interval)]
             src_task_info = task_infos[src_task.name]
@@ -496,8 +431,8 @@ class MetaMultiTaskTrainer():
             if src_task_info['stopped'] or trg_task_info['stopped']:
                 continue
             src_gen, trg_gen = src_task_info['tr_generator'], trg_task_info['tr_generator']
-            optimizer = g_optimizer if shared_optimizer else src_task_info['optimizer']
-            scheduler = g_scheduler if shared_optimizer else src_task_info['scheduler']
+            optimizer = src_task_info['optimizer']
+            scheduler = src_task_info['scheduler']
             for src_batch, trg_batch in zip(itertools.islice(src_gen, n_batches_per_pass),
                                             itertools.islice(trg_gen, n_batches_per_pass)):
                 src_task_info['n_batches_since_val'] += 1
@@ -508,7 +443,7 @@ class MetaMultiTaskTrainer():
                 optimizer.zero_grad()
 
                 ### START DOING META STUFF ###
-                if slow_params_approx: # assume cand_params ~= params
+                if self._slow_params_approx: # assume cand_params ~= params
                     trg_out = self._model(trg_task, trg_batch)
                     src_out = self._model(src_task, src_batch)
                     trg_grads = self._get_gradient(trg_out['loss'], self._shared_params)
@@ -523,14 +458,14 @@ class MetaMultiTaskTrainer():
                     if pseudo_meta: # TODO(Alex): delete when done
                         loss = gross_loss
                     else:
-                        loss = gross_loss - (sim_lr * regularizer)
+                        loss = gross_loss - (self._sim_lr * regularizer)
                     if self._approx_term == 'only_cos_sim':
                         loss = -cos_sim
                     loss.backward()
 
                 else: # exact case
-                    # NOTE(AW): I'm pretty sure the autograd.grad calls don't need create_graph b/c I already
-                    #           created graph on the backwards calls
+                    # NOTE(AW): I'm pretty sure the autograd.grad calls don't need create_graph
+                    # b/c I already created graph on the backwards calls
                     src_grads, sim_trg_grads, trg_out = \
                             self._get_meta_gradients(src_task, src_batch, trg_task, trg_batch)
                     if not self._one_sided_update:
@@ -573,7 +508,7 @@ class MetaMultiTaskTrainer():
                          src_task_info['total_batches_trained'], src_description)
                 log.info("\ttrg_task %s, batch %d (%d): %s", trg_task.name, trg_nbsv,
                          trg_task_info['total_batches_trained'], trg_description)
-                if slow_params_approx:
+                if self._slow_params_approx:
                     log.info("\tnet loss: %.3f, src loss: %.3f, trg loss: %.3f", loss, src_loss, trg_loss)
                     if pseudo_meta:
                         log.info("\tgross loss: %.3f", gross_loss)
@@ -626,8 +561,8 @@ class MetaMultiTaskTrainer():
                     log.info("%s: trained on %d batches, %.3f epochs", task.name,
                              n_batches_since_val, n_batches_since_val / task_info['n_tr_batches'])
 
-                if self._model.utilization is not None:
-                    batch_util = self._model.utilization.get_metric(reset=True)
+                if model.utilization is not None:
+                    batch_util = model.utilization.get_metric(reset=True)
                     log.info("TRAINING BATCH UTILIZATION: %.3f", batch_util)
 
                 # Validate
@@ -637,7 +572,9 @@ class MetaMultiTaskTrainer():
                     "preds_{}{}_{}_epoch_{}.txt".format(
                         time.time(), task.name, phase, epoch)) for task in tasks}
                 all_val_metrics, should_save, new_best_macro = self._validate(
-                    epoch, tasks, batch_size, periodic_save=(phase != "eval"), preds_file_path_dict=preds_file_path_dict)
+                    epoch, tasks, batch_size,
+                    periodic_save=(phase != "eval"),
+                    preds_file_path_dict=preds_file_path_dict)
 
                 # Check stopping conditions
                 should_stop = self._check_stop(epoch, stop_metric, tasks)
@@ -653,7 +590,7 @@ class MetaMultiTaskTrainer():
                 lrs = self._get_lr() # log LR
                 for name, value in lrs.items():
                     log.info("%s: %.6f", name, value)
-                elmo_params = self._model.get_elmo_mixing_weights(tasks)
+                elmo_params = model.get_elmo_mixing_weights(tasks)
                 if elmo_params: # log ELMo mixing weights
                     for task_name, task_params in elmo_params.items():
                         log.info("ELMo mixing weights for {}:".format(task_name))
@@ -662,10 +599,8 @@ class MetaMultiTaskTrainer():
 
                 # Reset training progress
                 all_tr_metrics = {}
-                #samples_src = random.choices(tasks, weights=sample_weights, k=validation_interval)
-                #samples_trg = random.choices(tasks, weights=sample_weights, k=validation_interval)
-                samples_src = [tasks[0] for _ in range(validation_interval)]
-                samples_trg = [tasks[1] for _ in range(validation_interval)]
+                samples_src, samples_trg = self._setup_task_samples(tasks, weights=sample_weights,
+                                                                    n_samples=validation_interval)
 
                 if should_save:
                     self._save_checkpoint(
@@ -723,7 +658,7 @@ class MetaMultiTaskTrainer():
 
             for batch in val_generator:
                 batch_num += 1
-                out = self._forward(batch, task=task, for_training=False)
+                out = self._model(task=task, batch=batch)
                 loss = out["loss"]
                 all_val_metrics["%s_loss" % task.name] += loss.data.cpu().numpy()
                 n_examples += out["n_exs"]
@@ -793,19 +728,42 @@ class MetaMultiTaskTrainer():
 
             # Get scheduler, using global scheduler if exists and task is macro
             # micro has no scheduler updates
-            if hasattr(task, 'name') and g_scheduler is None:
+            if hasattr(task, 'name'):
                 scheduler = task_infos[task.name]['scheduler']
-            elif g_scheduler is not None and task == 'macro':
-                scheduler = g_scheduler
             else:
-                scheduler = None
-            if scheduler is not None and isinstance(scheduler.lr_scheduler, ReduceLROnPlateau):
+                scheduler = g_scheduler
+            if isinstance(scheduler.lr_scheduler, ReduceLROnPlateau):
                 log.info("Advancing scheduler.")
                 scheduler.step(this_epoch_metric, epoch)
                 log.info("\tBest %s: %.3f", metric, scheduler.lr_scheduler.best)
                 log.info("\t# bad epochs: %d", scheduler.lr_scheduler.num_bad_epochs)
 
         return all_val_metrics, should_save, new_best_macro
+
+    def _check_history(self, metric_history, cur_score, should_decrease=False):
+        '''
+        Given a the history of the performance on a metric
+        and the current score, check if current score is
+        best so far and if out of patience.
+        '''
+        patience = self._patience + 1
+        best_fn = min if should_decrease else max
+        best_score = best_fn(metric_history)
+        if best_score == cur_score:
+            best_so_far = metric_history.index(best_score) == len(metric_history) - 1
+        else:
+            best_so_far = False
+
+        out_of_patience = False
+        if should_decrease:
+            index_of_last_improvement = metric_history.index(min(metric_history))
+            out_of_patience = index_of_last_improvement <= len(metric_history) - (patience + 1)
+        else:
+            index_of_last_improvement = metric_history.index(max(metric_history))
+            out_of_patience = index_of_last_improvement <= len(metric_history) - (patience + 1)
+
+        return best_so_far, out_of_patience
+
 
     def _get_gradient(self, loss, params):
         """ Explicitly get gradient of loss """
@@ -904,33 +862,23 @@ class MetaMultiTaskTrainer():
 
     def _get_lr(self):
         ''' Get learning rate from the optimizer we're using '''
-        if self._g_optimizer is not None:
-            lrs = {'global_lr': self._g_optimizer.param_groups[0]['lr']}
-        else:
-            lrs = {}
-            for task, task_info in self._task_infos.items():
-                lrs["%s_lr" % task] = task_info['optimizer'].param_groups[0]['lr']
+        lrs = {}
+        for task, task_info in self._task_infos.items():
+            lrs["%s_lr" % task] = task_info['optimizer'].param_groups[0]['lr']
+        if self._shared_optimizer:
+            lrs = {'global_lr': [v for v in lrs.values()][0]}
         return lrs
 
     def _check_stop(self, epoch, stop_metric, tasks):
         ''' Check to see if should stop '''
         task_infos, metric_infos = self._task_infos, self._metric_infos
-        g_optimizer = self._g_optimizer
-        if g_optimizer is None:
-            stop_tr = True
-            for task in tasks:
-                task_info = task_infos[task.name]
-                if task_info['optimizer'].param_groups[0]['lr'] < self._min_lr:
-                    log.info("Minimum lr hit on %s.", task.name)
-                    task_info['stopped'] = True
-                stop_tr = stop_tr and task_info['stopped']
-                #stop_val = stop_val and metric_infos[task.val_metric]['stopped']
-        else:
-            if g_optimizer.param_groups[0]['lr'] < self._min_lr:
-                log.info("Minimum lr hit.")
-                stop_tr = True
-            else:
-                stop_tr = False
+        stop_tr = True
+        for task in tasks:
+            task_info = task_infos[task.name]
+            if task_info['optimizer'].param_groups[0]['lr'] < self._min_lr:
+                log.info("Minimum lr hit on %s.", task.name)
+                task_info['stopped'] = True
+            stop_tr = stop_tr and task_info['stopped']
 
         stop_val = metric_infos[stop_metric]['stopped']
 
@@ -946,11 +894,6 @@ class MetaMultiTaskTrainer():
             should_stop = True
 
         return should_stop
-
-    def _forward(self, batch, for_training, task=None):
-        ''' At one point this does something, now it doesn't really do anything '''
-        tensor_batch = batch
-        return self._model.forward(task, tensor_batch)
 
     def _description_from_metrics(self, metrics):
         # pylint: disable=no-self-use
@@ -1024,22 +967,15 @@ class MetaMultiTaskTrainer():
                 task_states[task_name] = {}
                 task_states[task_name]['total_batches_trained'] = task_info['total_batches_trained']
                 task_states[task_name]['stopped'] = task_info['stopped']
-                if self._g_optimizer is None:
-                    task_states[task_name]['optimizer'] = task_info['optimizer'].state_dict()
-                    sched = task_info['scheduler']
-                    sched_params = {}  # {'best': sched.best, 'num_bad_epochs': sched.num_bad_epochs,
-                    #'cooldown_counter': sched.cooldown_counter}
-                    task_states[task_name]['scheduler'] = sched_params
-            task_states['global'] = {}
-            task_states['global']['optimizer'] = self._g_optimizer.state_dict() if \
-                self._g_optimizer is not None else None
-            if self._g_scheduler is not None:
-                sched = self._g_scheduler
+                task_states[task_name]['optimizer'] = task_info['optimizer'].state_dict()
+                sched = task_info['scheduler']
                 sched_params = {}  # {'best': sched.best, 'num_bad_epochs': sched.num_bad_epochs,
                 #'cooldown_counter': sched.cooldown_counter}
-                task_states['global']['scheduler'] = sched_params
-            else:
-                task_states['global']['scheduler'] = None
+                task_states[task_name]['scheduler'] = sched_params
+            task_states['shared_optimizer'] = self._shared_optimizer
+            #sched_params = {}  # {'best': sched.best, 'num_bad_epochs': sched.num_bad_epochs,
+            #'cooldown_counter': sched.cooldown_counter}
+            #task_states['global_scheduler'] = sched_params
             torch.save(task_states, os.path.join(self._serialization_dir,
                                                  "task_state_{}_epoch_{}{}.th".format(
                                                      phase, epoch, best_str)))
@@ -1089,7 +1025,7 @@ class MetaMultiTaskTrainer():
                     to_return = x
             return to_return.split("model_state_")[-1]
 
-    def _restore_checkpoint(self, search_phases_in_priority_order=['main']):
+    def _restore_checkpoint(self, model, search_phases_in_priority_order=['main']):
         """
         Restores a model from a serialization_dir to the last saved checkpoint.
         This includes an epoch count and optimizer state, which is serialized separately
@@ -1126,11 +1062,13 @@ class MetaMultiTaskTrainer():
                 log.error("Parameter missing from checkpoint: " + name)
                 log.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 
-        self._model.load_state_dict(model_state, strict=False)
+        model.load_state_dict(model_state, strict=False)
 
         task_states = torch.load(task_state_path)
+        self._shared_optimizer = task_states['shared_optimizer']
+        # TODO(Alex): if using shared_optimizer, need to make it so there's only one optimizer
         for task_name, task_state in task_states.items():
-            if task_name == 'global':
+            if task_name == 'global_scheduler':
                 continue
             self._task_infos[task_name]['total_batches_trained'] = task_state['total_batches_trained']
             if 'optimizer' in task_state:
@@ -1142,11 +1080,9 @@ class MetaMultiTaskTrainer():
             for _ in itertools.islice(generator, task_state['total_batches_trained'] %
                                       self._task_infos[task_name]['n_tr_batches']):
                 pass
-        if task_states['global']['optimizer'] is not None:
-            self._g_optimizer.load_state_dict(task_states['global']['optimizer'])
-        if task_states['global']['scheduler'] is not None:
-            for param, val in task_states['global']['scheduler'].items():
-                setattr(self._g_scheduler, param, val)
+
+        for param, val in task_states['global_scheduler'].items():
+            setattr(self._g_scheduler, param, val)
 
         metric_states = torch.load(metric_state_path)
         for metric_name, metric_state in metric_states.items():
@@ -1169,39 +1105,3 @@ class MetaMultiTaskTrainer():
                 name = "%s/%s" % (metric_name.split('_')[0], metric_name)
                 split = "val"
             self._tb_writers[split].add_scalar(name, metric_val, step)
-
-    @classmethod
-    def from_params(cls, model, model_copy, serialization_dir, params):
-        ''' Generator trainer from parameters.  '''
-
-        patience = params.pop("patience", 2)
-        val_interval = params.pop("val_interval", 100)
-        max_vals = params.pop("max_vals", 50)
-        cuda_device = params.pop("cuda_device", -1)
-        max_grad_norm = params.pop("max_grad_norm", None)
-        lr_decay = params.pop("lr_decay", None)
-        min_lr = params.pop("min_lr", None)
-        keep_all_checkpoints = params.pop("keep_all_checkpoints", False)
-        val_data_limit = params.pop("val_data_limit", 5000)
-        dec_val_scale = params.pop("dec_val_scale", 100)
-        training_data_fraction = params.pop("training_data_fraction", 1.0)
-        sim_lr = params.pop("sim_lr", .001)
-        max_sim_grad_norm = params.pop("max_sim_grad_norm", None)
-        slow_params_approx = params.pop("slow_params_approx", 0)
-        only_pos_reg = params.pop("only_pos_reg", 0)
-        approx_term = params.pop("approx_term", "cos_sim")
-        one_sided_update = params.pop("one_sided_update", 0)
-
-        params.assert_empty(cls.__name__)
-        return MetaMultiTaskTrainer(model, model_copy, patience=patience,
-                                    val_interval=val_interval, max_vals=max_vals,
-                                    serialization_dir=serialization_dir,
-                                    cuda_device=cuda_device, max_grad_norm=max_grad_norm,
-                                    lr_decay=lr_decay,
-                                    min_lr=min_lr, keep_all_checkpoints=keep_all_checkpoints,
-                                    val_data_limit=val_data_limit,
-                                    dec_val_scale=dec_val_scale,
-                                    training_data_fraction=training_data_fraction,
-                                    sim_lr=sim_lr, max_sim_grad_norm=max_sim_grad_norm,
-                                    slow_params_approx=slow_params_approx, only_pos_reg=only_pos_reg,
-                                    approx_term=approx_term, one_sided_update=one_sided_update)

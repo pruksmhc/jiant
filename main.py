@@ -206,30 +206,35 @@ def main(cl_arguments):
     if args.do_train:
         # Train on train tasks #
         log.info("Training...")
-        build_trainer_params = mtrainer.build_trainer_params if args.metatrain else ntrainer.build_trainer_params
         build_trainer = mtrainer.build_trainer if args.metatrain else ntrainer.build_trainer
-        params = build_trainer_params(args, task_names=[])
         stop_metric = train_tasks[0].val_metric if len(train_tasks) == 1 else 'macro_avg'
         should_decrease = train_tasks[0].val_metric_decreases if len(train_tasks) == 1 else False
-        to_train = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+        params_to_train = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
         if args.metatrain:
-            trainer, _, opt_params, schd_params = build_trainer(params, model, model_copy,
-                                                                args.run_dir, should_decrease)
-            best_epochs = trainer.train(train_tasks, stop_metric,
-                                        args.batch_size, args.bpp_base,
-                                        args.weighting_method, args.scaling_method,
-                                        to_train, opt_params, schd_params,
-                                        args.shared_optimizer, args.load_model,
+            trainer = build_trainer(args, [], args.run_dir, should_decrease)
+            best_epochs = trainer.train(model=model, model_copy=model_copy,
+                                        tasks=train_tasks, stop_metric=stop_metric,
+                                        batch_size=args.batch_size,
+                                        n_batches_per_pass=args.bpp_base,
+                                        weighting_method=args.weighting_method,
+                                        scaling_method=args.scaling_method,
+                                        params_to_train=params_to_train,
+                                        shared_optimizer=args.shared_optimizer,
+                                        load_model=args.load_model,
                                         phase="main", pseudo_meta=args.pseudo_meta,
                                         multistep_loss=args.multistep_loss, multistep_scale=args.multistep_scale)
 
         else:
-            trainer, _, opt_params, schd_params = build_trainer(params, model, args.run_dir, should_decrease)
-            best_epochs = trainer.train(train_tasks, stop_metric,
-                                        args.batch_size, args.bpp_base,
-                                        args.weighting_method, args.scaling_method,
-                                        to_train, opt_params, schd_params,
-                                        args.shared_optimizer, args.load_model,
+            trainer = build_trainer(args, [], args.run_dir, should_decrease)
+            best_epochs = trainer.train(model=model,
+                                        tasks=train_tasks, stop_metric=stop_metric,
+                                        batch_size=args.batch_size,
+                                        n_batches_per_pass=args.bpp_base,
+                                        weighting_method=args.weighting_method,
+                                        scaling_method=args.scaling_method,
+                                        params_to_train=params_to_train,
+                                        shared_optimizer=args.shared_optimizer,
+                                        load_model=args.load_model,
                                         phase="main", track_grad_stats=args.track_grad_stats)
 
     # Select model checkpoint from main training run to load
@@ -283,24 +288,28 @@ def main(cl_arguments):
                        "they should not be updated! Check sep_embs_for_skip flag or make an issue.")
         for task in eval_tasks:
             # Skip mnli-diagnostic
-            # This has to be handled differently than probing tasks because probing tasks require the "is_probing_task"
-            # to be set to True. For mnli-diagnostic this flag will be False because it is part of GLUE and
+            # This has to be handled differently than probing tasks because
+            # probing tasks require the "is_probing_task" to be set to True.
+            # For mnli-diagnostic this flag will be False because it is part of GLUE and
             # "is_probing_task is global flag specific to a run, not to a task.
             if task.name == 'mnli-diagnostic':
                 continue
             pred_module = getattr(model, "%s_mdl" % task.name)
-            to_train = elmo_scalars + [(n, p) for n, p in pred_module.named_parameters() if p.requires_grad]
+            params_to_train = elmo_scalars + [(n, p) for n, p in pred_module.named_parameters() if p.requires_grad]
             # Look for <task_name>_<param_name>, then eval_<param_name>
             log.info("Training task %s with a non-meta trainer", task.name)
-            params = ntrainer.build_trainer_params(args, task_names=[task.name, 'eval'])
-            trainer, _, opt_params, schd_params = ntrainer.build_trainer(params, model,
-                                                                         args.run_dir,
-                                                                         task.val_metric_decreases)
-            best_epoch = trainer.train([task], task.val_metric,
-                                       args.batch_size, 1,
-                                       args.weighting_method, args.scaling_method,
-                                       to_train, opt_params, schd_params,
-                                       args.shared_optimizer, load_model=False, phase="eval")
+            trainer = ntrainer.build_trainer(args, [task.name, 'eval'],
+                                             args.run_dir, task.val_metric_decreases)
+            best_epoch = trainer.train(model=model,
+                                       tasks=[task],
+                                       stop_metric=task.val_metric,
+                                       batch_size=args.batch_size,
+                                       n_batches_per_pass=1,
+                                       weighting_method=args.weighting_method,
+                                       scaling_method=args.scaling_method,
+                                       params_to_train=params_to_train,
+                                       shared_optimizer=args.shared_optimizer,
+                                       load_model=False, phase="eval")
 
             # Now that we've trained a model, revert to the normal checkpoint logic for this task.
             if task.name in task_names_to_avoid_loading:
@@ -310,7 +319,8 @@ def main(cl_arguments):
             # This logic looks strange. We think it works.
             best_epoch = best_epoch[task.name]
             layer_path = os.path.join(args.run_dir, "model_state_eval_best.th")
-            load_model_state(model, layer_path, args.cuda, skip_task_models=task_names_to_avoid_loading, strict=strict)
+            load_model_state(model, layer_path, args.cuda,
+                             skip_task_models=task_names_to_avoid_loading, strict=strict)
 
     if args.do_eval:
         # Evaluate #

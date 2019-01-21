@@ -25,33 +25,7 @@ from .utils import device_mapping, assert_for_log # pylint: disable=import-error
 from .evaluate import evaluate
 from . import config
 
-
-def build_trainer_params(args, task_names):
-    ''' In an act of not great code design, we wrote this helper function which
-    extracts trainer parameters from args. In particular, we want to search args
-    for task specific training parameters. '''
-    _get_task_attr = lambda attr_name: config.get_task_attr(args, task_names,
-                                                            attr_name)
-    params = {}
-    train_opts = ['optimizer', 'lr', 'batch_size', 'lr_decay_factor',
-                  'task_patience', 'patience', 'scheduler_threshold']
-    # we want to pass to the build_train()
-    extra_opts = ['sent_enc', 'd_hid', 'warmup',
-                  'max_grad_norm', 'min_lr', 'batch_size',
-                  'cuda', 'keep_all_checkpoints',
-                  'val_data_limit', 'training_data_fraction']
-    for attr in train_opts:
-        params[attr] = _get_task_attr(attr)
-    for attr in extra_opts:
-        params[attr] = getattr(args, attr)
-    params['max_vals'] = _get_task_attr('max_vals')
-    params['val_interval'] = _get_task_attr('val_interval')
-    params['dec_val_scale'] = _get_task_attr('dec_val_scale')
-
-    return Params(params)
-
-
-def build_trainer(params, model, run_dir, metric_should_decrease=True):
+def build_trainer(args, task_names, run_dir, metric_should_decrease=True):
     '''Build a trainer from params.
 
     Parameters
@@ -65,51 +39,71 @@ def build_trainer(params, model, run_dir, metric_should_decrease=True):
     A trainer object, a trainer config object, an optimizer config object,
         and a scheduler config object.
     '''
+    _get_task_attr = lambda attr_name: config.get_task_attr(args, task_names, attr_name)
+    opt_params = build_optimizer_params(args)
+    schd_params = build_scheduler_params(args, metric_should_decrease)
 
-    if params['optimizer'] == 'adam':
+    trainer = SamplingMultiTaskTrainer(opt_params=opt_params,
+                                       schd_params=schd_params,
+                                       patience=_get_task_attr('patience'),
+                                       val_interval=_get_task_attr('val_interval'),
+                                       max_vals=_get_task_attr('max_vals'),
+                                       serialization_dir=run_dir,
+                                       cuda_device=_get_task_attr('cuda'),
+                                       max_grad_norm=_get_task_attr('max_grad_norm'),
+                                       lr_decay=_get_task_attr('lr_decay_factor'),
+                                       min_lr=_get_task_attr('min_lr'),
+                                       keep_all_checkpoints=_get_task_attr('keep_all_checkpoints'),
+                                       val_data_limit=_get_task_attr('val_data_limit'),
+                                       dec_val_scale=_get_task_attr('dec_val_scale'),
+                                       training_data_fraction=_get_task_attr('training_data_fraction'))
+
+    return trainer
+
+def build_optimizer_params(args):
+    ''' Build optimizer params '''
+    opt_params = {'type': args['optimizer'], 'lr': args['lr'], 'weight_decay': 0}
+    if args['optimizer'] == 'adam':
         # AMSGrad is a flag variant of Adam, not its own object.
-        opt_params = Params({'type': params['optimizer'], 'lr': params['lr'],
-                             'weight_decay': 0, 'amsgrad': True})
-    else:
-        opt_params = Params({'type': params['optimizer'], 'lr': params['lr'],
-                             'weight_decay': 0})
+        opt_params['amsgrad'] = True
+    return Params(opt_params)
 
-    if 'transformer' in params['sent_enc']:
+def build_scheduler_params(params, should_decrease=True):
+    ''' Build scheduler params '''
+    schd_type = params['scheduler']
+    if 'transformer' in params['sent_enc'] or schd_type == 'noam':
         assert False, "Transformer is not yet tested, still in experimental stage :-("
-        schd_params = Params({'type': 'noam',
+        schd_params = Params({'type': schd_type,
                               'model_size': params['d_hid'],
                               'warmup_steps': params['warmup'],
                               'factor': 1.0})
         log.info('\tUsing noam scheduler with warmup %d!', params['warmup'])
-    else:
-        schd_params = Params({'type': 'reduce_on_plateau',
-                              'mode': 'min' if metric_should_decrease else 'max',
+    elif schd_type == 'cosine':
+        # TODO(Alex): lots of other parameters to set
+        schd_params = Params({'type': schd_type,
+                              'T_max': params['max_vals']
+                             })
+        log.info('\tUsing cosine scheduler!')
+    elif schd_type == 'reduce_on_plateau':
+        schd_params = Params({'type': schd_type,
+                              'mode': 'min' if should_decrease else 'max',
                               'factor': params['lr_decay_factor'],
                               'patience': params['task_patience'],
                               'threshold': params['scheduler_threshold'],
                               'threshold_mode': 'abs',
                               'verbose': True})
         log.info('\tUsing ReduceLROnPlateau scheduler!')
+    else:
+        raise ValueError("Scheduler %s not supported!" % schd_type)
 
-    train_params = Params({'cuda_device': params['cuda'],
-                           'patience': params['patience'],
-                           'grad_norm': params['max_grad_norm'],
-                           'val_interval': params['val_interval'],
-                           'max_vals': params['max_vals'],
-                           'lr_decay': .99, 'min_lr': params['min_lr'],
-                           'keep_all_checkpoints': params['keep_all_checkpoints'],
-                           'val_data_limit': params['val_data_limit'],
-                           'dec_val_scale': params['dec_val_scale'],
-                           'training_data_fraction': params['training_data_fraction']})
-    trainer = SamplingMultiTaskTrainer.from_params(model, run_dir,
-                                                   copy.deepcopy(train_params))
-    return trainer, train_params, opt_params, schd_params
+    return schd_params
 
 
 class SamplingMultiTaskTrainer():
-    def __init__(self, model, patience=2, val_interval=100, max_vals=50,
+    def __init__(self, opt_params, schd_params,
+                 patience=2, val_interval=100, max_vals=50,
                  serialization_dir=None, cuda_device=-1,
-                 grad_norm=None, grad_clipping=None, lr_decay=None, min_lr=None,
+                 max_grad_norm=None, grad_clipping=None, lr_decay=None, min_lr=None,
                  keep_all_checkpoints=False, val_data_limit=5000,
                  dec_val_scale=100, training_data_fraction=1.0):
         """
@@ -157,14 +151,15 @@ class SamplingMultiTaskTrainer():
         training_data_fraction: If set to a float between 0 and 1, load only the specified percentage
             of examples. Hashing is used to ensure that the same examples are loaded each epoch.
         """
-        self._model = model
+        self._opt_params = opt_params
+        self._schd_params = schd_params
 
         self._patience = patience
         self._max_vals = max_vals
         self._val_interval = val_interval
         self._serialization_dir = serialization_dir
         self._cuda_device = cuda_device
-        self._grad_norm = grad_norm
+        self._grad_norm = max_grad_norm
         self._grad_clipping = grad_clipping
         self._lr_decay = lr_decay
         self._min_lr = min_lr
@@ -177,8 +172,6 @@ class SamplingMultiTaskTrainer():
         self._metric_infos = None
 
         self._log_interval = 10  # seconds
-        if self._cuda_device >= 0:
-            self._model = self._model.cuda(self._cuda_device)
 
         self._TB_dir = None
         if self._serialization_dir is not None:
@@ -212,7 +205,7 @@ class SamplingMultiTaskTrainer():
 
         return best_so_far, out_of_patience
 
-    def _setup_training(self, tasks, batch_size, train_params, optimizer_params, scheduler_params, phase):
+    def _setup_training(self, tasks, batch_size, params_to_train, optimizer_params, scheduler_params, phase):
         ''' Set up the trainer by initializing task_infos and metric_infos, which
         track necessary information about the training status of each task and metric respectively.
 
@@ -266,7 +259,7 @@ class SamplingMultiTaskTrainer():
             task_info['loss'] = 0.0
             task_info['total_batches_trained'] = 0
             task_info['n_batches_since_val'] = 0
-            task_info['optimizer'] = Optimizer.from_params(train_params,
+            task_info['optimizer'] = Optimizer.from_params(params_to_train,
                                                            copy.deepcopy(optimizer_params))
             task_info['scheduler'] = LearningRateScheduler.from_params(
                 task_info['optimizer'], copy.deepcopy(scheduler_params))
@@ -280,10 +273,10 @@ class SamplingMultiTaskTrainer():
         self._metric_infos = metric_infos
         return task_infos, metric_infos
 
-    def train(self, tasks, stop_metric,
+    def train(self, model, tasks, stop_metric,
               batch_size, n_batches_per_pass,
               weighting_method, scaling_method,
-              train_params, optimizer_params, scheduler_params,
+              params_to_train,
               shared_optimizer=1, load_model=1, phase="main",
               track_grad_stats=False):
         """
@@ -298,7 +291,7 @@ class SamplingMultiTaskTrainer():
         n_batches_per_pass: How many training steps per task per pass.
         weighting_method: How to sample which task to use.
         scaling_method: How to scale gradients.
-        train_params: Trainer config object.
+        params_to_train: Trainer config object.
         optimizer_params: Optimizer config object.
         scheduler_params: Scheduler config object.
         shared_optimizer: Use a single optimizer object for all tasks in MTL. Recommended.
@@ -309,14 +302,19 @@ class SamplingMultiTaskTrainer():
         -------
         Validation results
         """
+        self._model = model
+        if self._cuda_device >= 0:
+            self._model = self._model.cuda(self._cuda_device)
+
         validation_interval = self._val_interval
-        task_infos, metric_infos = self._setup_training(tasks, batch_size, train_params,
-                                                        optimizer_params, scheduler_params, phase)
+        task_infos, metric_infos = self._setup_training(tasks, batch_size, params_to_train,
+                                                        self._opt_params, self._schd_params,
+                                                        phase)
 
         if shared_optimizer: # if shared_optimizer, ignore task_specific optimizers
-            g_optimizer = Optimizer.from_params(train_params, copy.deepcopy(optimizer_params))
+            g_optimizer = Optimizer.from_params(params_to_train, copy.deepcopy(self._opt_params))
             g_scheduler = LearningRateScheduler.from_params(
-                g_optimizer, copy.deepcopy(scheduler_params))
+                g_optimizer, copy.deepcopy(self._schd_params))
         else:
             g_optimizer, g_scheduler = None, None
         self._g_optimizer = g_optimizer
@@ -956,32 +954,3 @@ class SamplingMultiTaskTrainer():
             val_metric = val_metrics.get(name)
             name = name.split('_')[0] + '/' + name
             self._TB_validation_log.add_scalar(name, val_metric, epoch)
-
-    @classmethod
-    def from_params(cls, model, serialization_dir, params):
-        ''' Generate trainer from parameters.  '''
-
-        patience = params.pop("patience", 2)
-        val_interval = params.pop("val_interval", 100)
-        max_vals = params.pop("max_vals", 50)
-        cuda_device = params.pop("cuda_device", -1)
-        grad_norm = params.pop("grad_norm", None)
-        grad_clipping = params.pop("grad_clipping", None)
-        lr_decay = params.pop("lr_decay", None)
-        min_lr = params.pop("min_lr", None)
-        keep_all_checkpoints = params.pop("keep_all_checkpoints", False)
-        val_data_limit = params.pop("val_data_limit", 5000)
-        dec_val_scale = params.pop("dec_val_scale", 100)
-        training_data_fraction = params.pop("training_data_fraction", 1.0)
-
-        params.assert_empty(cls.__name__)
-        return SamplingMultiTaskTrainer(model, patience=patience,
-                                        val_interval=val_interval, max_vals=max_vals,
-                                        serialization_dir=serialization_dir,
-                                        cuda_device=cuda_device, grad_norm=grad_norm,
-                                        grad_clipping=grad_clipping, lr_decay=lr_decay,
-                                        min_lr=min_lr,
-                                        keep_all_checkpoints=keep_all_checkpoints,
-                                        val_data_limit=val_data_limit,
-                                        dec_val_scale=dec_val_scale,
-                                        training_data_fraction=training_data_fraction)
