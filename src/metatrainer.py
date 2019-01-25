@@ -466,23 +466,24 @@ class MetaMultiTaskTrainer():
                 else: # exact case
                     # NOTE(AW): I'm pretty sure the autograd.grad calls don't need create_graph
                     # b/c I already created graph on the backwards calls
-                    src_grads, sim_trg_grads, trg_out = \
+                    src_grads, sim_trg_grads, trg_out, sim_src_out = \
                             self._get_meta_gradients(src_task, src_batch, trg_task, trg_batch)
                     if not self._one_sided_update:
-                        trg_grads, sim_src_grads, src_out = \
+                        trg_grads, sim_src_grads, src_out, _ = \
                                 self._get_meta_gradients(trg_task, trg_batch, src_task, src_batch)
                         gradients = [trg_grads, src_grads]
                         sim_gradss = [sim_trg_grads, sim_src_grads] if multistep_loss else []
                     else:
                         gradients = [src_grads]
                         sim_gradss = [sim_trg_grads] if multistep_loss else []
+                        src_out = sim_src_out
                     self._assign_gradients(gradients, sim_gradss, multistep_scale)
 
-                trg_loss = trg_out['loss'].item()
-                src_loss = src_out['loss'].item()
-                trg_task_info['loss'] += trg_loss
-                src_task_info['loss'] += src_loss
-                loss = trg_loss + src_loss
+                    trg_loss = trg_out['loss'].item()
+                    src_loss = src_out['loss'].item()
+                    trg_task_info['loss'] += trg_loss
+                    src_task_info['loss'] += src_loss
+                    loss = trg_loss + src_loss
 
                 # Gradient regularization and application
                 if self._max_grad_norm:
@@ -800,7 +801,8 @@ class MetaMultiTaskTrainer():
         return regularizer, dot_prod, cos_sim, norm1, norm2
 
     def _get_meta_gradients(self, task1, batch1, task2, batch2):
-        """ """
+        """ Simulate an SGD update on task1, then optimize loss of task2
+        given the simulated updated parameters"""
         model = self._model
         model_copy = self._model_copy
         shared_params = self._shared_params
@@ -808,7 +810,7 @@ class MetaMultiTaskTrainer():
         model_copy.zero_grad()
 
         # clone the parameters and create the simulated params
-        cand_params, sim_out, sim_grads = \
+        cand_params, sim_out1, sim_grads = \
             simulate_sgd(model, shared_params, task1, batch1, sim_lr=self._sim_lr)
         all_cand_params = [p for p in self._all_params]
         for j, i in enumerate(shared_params_idxs):
@@ -818,8 +820,8 @@ class MetaMultiTaskTrainer():
         set_model_params(model_copy, all_cand_params)
 
         # do a forward pass of the model copy and backward to get gradients
-        out = model_copy(task2, batch2)
-        out['loss'].backward(create_graph=True, retain_graph=True)
+        out2 = model_copy(task2, batch2)
+        out2['loss'].backward(create_graph=True, retain_graph=True)
 
         # gather the model copy gradients and backwards propagate them
         cpy_grads = [w.grad for w in model_copy.parameters()] # grads of mdl cpy params
@@ -830,7 +832,7 @@ class MetaMultiTaskTrainer():
         meta_grads = autograd.grad(cand_params_w_grad, shared_params,
                                    grad_outputs=cpy_grads_nonnone, create_graph=False,
                                    allow_unused=True)
-        return meta_grads, sim_grads, out
+        return meta_grads, sim_grads, out2, sim_out1
 
     def _assign_gradients(self, grads, sim_gradss, multistep_scale):
         """ Assign gradients and pssible simulated gradients

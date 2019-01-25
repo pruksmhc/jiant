@@ -11,7 +11,7 @@ DAUPHIN_WIKI103_CONVS='[(850, 6)] * 3 + [(850, 1)] * 1 + [(850, 5)] * 4 + [(850,
 DAUPHIN_BWB_CONVS='[(512, 5)] + [(128, 1, 0), (128, 5, 0), (512, 1, 3)] * 3 + [(512, 1, 0), (512, 5, 0), (1024, 1, 3)] * 3 + [(1024, 1, 0), (1024, 5, 0), (2048, 1, 3)] * 6 + [(1024, 1, 0), (1024, 5, 0), (4096, 1, 3)]'
 
 ### debug ###
-python -m ipdb main.py --config config/meta.conf --overrides "exp_name = metalearn, run_name = debug-meta, max_vals = 3, val_interval = 100, do_train = 1, train_for_eval = 0, train_tasks = \"mnli,snli\", eval_tasks = \"none\", do_eval = 0, cuda = ${gpuid}, metatrain = 0, slow_params_approx = 0, sent_enc = conv, d_hid = 512, mnli_pair_attn = 0, snli_pair_attn = 0, multistep_loss = 1, one_sided_update = 0"
+python -m ipdb main.py --config config/meta.conf --overrides "exp_name = metalearn, run_name = debug-meta, max_vals = 3, val_interval = 100, do_train = 1, train_for_eval = 0, train_tasks = \"mnli,snli\", eval_tasks = \"none\", do_eval = 0, cuda = ${gpuid}, metatrain = 1, slow_params_approx = 0, sent_enc = conv, d_hid = 512, mnli_pair_attn = 0, snli_pair_attn = 0, multistep_loss = 1, one_sided_update = 1"
 
 # ConvLM 
 #python -m ipdb main.py --config config/meta.conf --overrides "cuda = ${cuda}, exp_name = metalearn, run_name = debug-convlm, max_vals = 3, val_interval = 100, do_train = 1, train_for_eval = 0, train_tasks = \"wiki2,mnli\", eval_tasks = \"none\", do_eval = 0, cuda = ${cuda}, metatrain = 0, slow_params_approx = 0, sent_enc = convlm, skip_embs = 0, d_hid = 512, mnli_pair_attn = 0, snli_pair_attn = 0, multistep_loss = 1"
