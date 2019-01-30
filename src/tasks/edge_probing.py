@@ -308,6 +308,20 @@ register_task('edges-dpr', rel_path='edges/dpr',
                    'val': "dev.edges.json",
                    'test': "test.edges.json",
                }, is_symmetric=False)(EdgeProbingTask)
+# Relation classification on TACRED. 42 labels.
+register_task('edges-rel-tacred', rel_path='edges/tacred/rel',
+               label_file="labels.txt", files_by_split={
+                   'train': "train.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
+# Entity classification on TACRED. 17 labels.
+register_task('edges-ner-tacred', rel_path='edges/tacred/entity',
+               label_file="labels.txt", files_by_split={
+                   'train': "train.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, single_sided=True)(EdgeProbingTask)
 
 ##
 # Older tasks or versions for backwards compatibility.
