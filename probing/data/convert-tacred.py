@@ -9,10 +9,10 @@
 #       -o /path/to/probing/data/tacred
 #
 # This generates two sets of files:
-# *.rel.json: relation classification, where span1 is the subject, span2 is the
+# rel/*.json: relation classification, where span1 is the subject, span2 is the
 # object, and the label is the relation class.
 #
-# *.entity.json: entity labeling, where span1 is a nominal mention and the
+# entity/*.json: entity labeling, where span1 is a nominal mention and the
 # label is the entity type.
 
 import sys
@@ -85,8 +85,8 @@ def main(args):
                         help="Output directory.")
     args = parser.parse_args(args)
 
-    if not os.path.isdir(args.output_dir):
-        os.mkdir(args.output_dir)
+    os.makedirs(os.path.join(args.output_dir, "rel"), exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "entity"), exist_ok=True)
 
     pd.options.display.float_format = '{:.2f}'.format
     for fname in args.inputs:
@@ -96,16 +96,14 @@ def main(args):
 
         # Create relation labeling data.
         log.info("Converting %s", fname)
-        target_fname = os.path.join(args.output_dir,
-                                    re.sub(r'\.json$', '.rel.json',
-                                           os.path.basename(fname)))
+        target_fname = os.path.join(args.output_dir, "rel",
+                                    os.path.basename(fname))
         convert_with_stats(records, target_fname, convert_record_rel)
 
         # Create relation labeling data.
         log.info("Converting %s", fname)
-        target_fname = os.path.join(args.output_dir,
-                                    re.sub(r'\.json$', '.entity.json',
-                                           os.path.basename(fname)))
+        target_fname = os.path.join(args.output_dir, "entity",
+                                    os.path.basename(fname))
         convert_with_stats(records, target_fname, convert_record_entity)
 
 

@@ -101,7 +101,8 @@ function get_tacred() {
     python $HERE/data/convert-tacred.py \
         -i ${PATH_TO_TACRED_LDC}/data/json/*.json \
         -o $OUTPUT_DIR/tacred
-    preproc_task $OUTPUT_DIR/tacred
+    preproc_task $OUTPUT_DIR/tacred/rel
+    preproc_task $OUTPUT_DIR/tacred/entity
 }
 
 get_ontonotes
