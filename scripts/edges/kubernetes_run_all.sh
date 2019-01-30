@@ -94,6 +94,8 @@ ALL_TASKS+=( "pos-ontonotes" )
 ALL_TASKS+=( "ner-ontonotes" )
 ALL_TASKS+=( "srl-conll2012" )
 ALL_TASKS+=( "coref-ontonotes-conll" )
+ALL_TASKS+=( "ner-tacred" )
+ALL_TASKS+=( "rel-tacred" )
 echo "All tasks to run: ${ALL_TASKS[@]}"
 
 if [[ $MODE == "delete" ]]; then
