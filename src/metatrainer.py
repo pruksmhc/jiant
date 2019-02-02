@@ -15,6 +15,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.nn.utils.clip_grad import clip_grad_norm_
 from tensorboardX import SummaryWriter  # pylint: disable=import-error
 
+from allennlp.nn.util import move_to_device
 from allennlp.common import Params  # pylint: disable=import-error
 from allennlp.common.checks import ConfigurationError  # pylint: disable=import-error
 from allennlp.data.iterators import BasicIterator, BucketIterator  # pylint: disable=import-error
@@ -240,7 +241,7 @@ class MetaMultiTaskTrainer():
                                       batch_size=batch_size,
                                       #padding_noise=0.0, # TODO(Alex): DELETE WHEN DONE
                                       biggest_batch_first=True)
-            tr_generator = iterator(task.train_data, num_epochs=None, cuda_device=self._cuda_device)
+            tr_generator = iterator(task.train_data, num_epochs=None)
             task_info['iterator'] = iterator
 
             if phase == "main":
@@ -435,11 +436,13 @@ class MetaMultiTaskTrainer():
             scheduler = src_task_info['scheduler']
             for src_batch, trg_batch in zip(itertools.islice(src_gen, n_batches_per_pass),
                                             itertools.islice(trg_gen, n_batches_per_pass)):
+                src_batch = move_to_device(src_batch, self._cuda_device)
+                trg_batch = move_to_device(trg_batch, self._cuda_device)
                 src_task_info['n_batches_since_val'] += 1
                 trg_task_info['n_batches_since_val'] += 1
                 src_task_info['total_batches_trained'] += 1
                 trg_task_info['total_batches_trained'] += 1
-                n_update += 2 # update per batch
+                n_update += 1 if self._one_sided_update else 2 # update per batch
                 optimizer.zero_grad()
 
                 ### START DOING META STUFF ###
@@ -455,22 +458,29 @@ class MetaMultiTaskTrainer():
 
                     # Loss computation
                     gross_loss = src_out['loss'] + trg_out['loss']
-                    if pseudo_meta: # TODO(Alex): delete when done
+                    # for debugging: compute the metaterm but don't use it
+                    # TODO(Alex): delete when done
+                    if pseudo_meta:
                         loss = gross_loss
                     else:
                         loss = gross_loss - (self._sim_lr * regularizer)
+                    # for debugging: optimize cosine similarity of gradients
+                    # TODO(Alex): delete when done
                     if self._approx_term == 'only_cos_sim':
                         loss = -cos_sim
                     loss.backward()
 
                 else: # exact case
-                    # NOTE(AW): I'm pretty sure the autograd.grad calls don't need create_graph
-                    # b/c I already created graph on the backwards calls
-                    src_grads, sim_trg_grads, trg_out, sim_src_out = \
-                            self._get_meta_gradients(src_task, src_batch, trg_task, trg_batch)
+                    # NOTE(AW): I'm pretty sure the autograd.grad calls don't need create_graph b/c I already
+                    #           created graph on the backwards calls
+                    # Get gradients of src_task after simulating trg task update
+                    src_grads, sim_trg_grads, trg_out = \
+                            self._get_meta_gradients(up_task=src_task, up_batch=src_batch,
+                                                     down_task=src_task, down_batch=src_batch)
                     if not self._one_sided_update:
-                        trg_grads, sim_src_grads, src_out, _ = \
-                                self._get_meta_gradients(trg_task, trg_batch, src_task, src_batch)
+                        trg_grads, sim_src_grads, src_out = \
+                                self._get_meta_gradients(up_task=trg_task, up_batch=trg_batch,
+                                                         down_task=trg_task, down_batch=trg_batch)
                         gradients = [trg_grads, src_grads]
                         sim_gradss = [sim_trg_grads, sim_src_grads] if multistep_loss else []
                     else:
@@ -479,11 +489,13 @@ class MetaMultiTaskTrainer():
                         src_out = sim_src_out
                     self._assign_gradients(gradients, sim_gradss, multistep_scale)
 
-                    trg_loss = trg_out['loss'].item()
+                trg_loss = trg_out['loss'].item()
+                trg_task_info['loss'] += trg_loss
+                loss = trg_loss
+                if not self._one_sided_update:
                     src_loss = src_out['loss'].item()
-                    trg_task_info['loss'] += trg_loss
                     src_task_info['loss'] += src_loss
-                    loss = trg_loss + src_loss
+                    loss += src_loss
 
                 # Gradient regularization and application
                 if self._max_grad_norm:
@@ -522,8 +534,11 @@ class MetaMultiTaskTrainer():
                     self._tb_writers["grad1"].add_scalar("approx/grad_mag", src_norm, n_update)
                     self._tb_writers["grad2"].add_scalar("approx/grad_mag", trg_norm, n_update)
                 else:
-                    log.info("\tupdate loss: %.3f, src loss %.3f, trg loss %.3f", loss,
-                             src_loss, trg_loss)
+                    if not self._one_sided_update:
+                        log.info("\tupdate loss: %.3f, src loss %.3f, trg loss %.3f", loss,
+                                 src_loss, trg_loss)
+                    else:
+                        log.info("\tupdate loss: %.3f, trg loss %.3f", loss, trg_loss)
 
 
                 if self._tb_writers is not None:
@@ -652,12 +667,12 @@ class MetaMultiTaskTrainer():
             else:
                 max_data_points = task.n_val_examples
             val_generator = BasicIterator(batch_size, instances_per_epoch=max_data_points)(
-                task.val_data, num_epochs=1, shuffle=False,
-                cuda_device=self._cuda_device)
+                task.val_data, num_epochs=1, shuffle=False)
             n_val_batches = math.ceil(max_data_points / batch_size)
             all_val_metrics["%s_loss" % task.name] = 0.0
 
             for batch in val_generator:
+                batch = move_to_device(batch, self._cuda_device)
                 batch_num += 1
                 out = self._model(task=task, batch=batch)
                 loss = out["loss"]
@@ -800,7 +815,7 @@ class MetaMultiTaskTrainer():
             raise ValueError("Regularization method %s not found!" % approx_term)
         return regularizer, dot_prod, cos_sim, norm1, norm2
 
-    def _get_meta_gradients(self, task1, batch1, task2, batch2):
+    def _get_meta_gradients(self, up_task, up_batch, down_task, down_batch):
         """ Simulate an SGD update on task1, then optimize loss of task2
         given the simulated updated parameters"""
         model = self._model
@@ -810,8 +825,8 @@ class MetaMultiTaskTrainer():
         model_copy.zero_grad()
 
         # clone the parameters and create the simulated params
-        cand_params, sim_out1, sim_grads = \
-            simulate_sgd(model, shared_params, task1, batch1, sim_lr=self._sim_lr)
+        cand_params, sim_out, sim_grads = \
+            simulate_sgd(model, shared_params, up_task, up_batch, sim_lr=self._sim_lr)
         all_cand_params = [p for p in self._all_params]
         for j, i in enumerate(shared_params_idxs):
             all_cand_params[i] = cand_params[j]
@@ -820,8 +835,8 @@ class MetaMultiTaskTrainer():
         set_model_params(model_copy, all_cand_params)
 
         # do a forward pass of the model copy and backward to get gradients
-        out2 = model_copy(task2, batch2)
-        out2['loss'].backward(create_graph=True, retain_graph=True)
+        out = model_copy(down_task, down_batch)
+        out['loss'].backward(create_graph=True, retain_graph=True)
 
         # gather the model copy gradients and backwards propagate them
         cpy_grads = [w.grad for w in model_copy.parameters()] # grads of mdl cpy params
