@@ -20,7 +20,6 @@ from torch.nn import Parameter
 from torch.nn import init
 
 from allennlp.common.checks import ConfigurationError
-from allennlp.nn.util import last_dim_softmax
 from allennlp.modules.seq2seq_encoders.seq2seq_encoder import Seq2SeqEncoder
 from allennlp.common.params import Params
 from allennlp.common.checks import ConfigurationError
