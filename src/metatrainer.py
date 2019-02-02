@@ -825,7 +825,7 @@ class MetaMultiTaskTrainer():
         model_copy.zero_grad()
 
         # clone the parameters and create the simulated params
-        cand_params, sim_out, sim_grads = \
+        cand_params, up_out, up_grads = \
             simulate_sgd(model, shared_params, up_task, up_batch, sim_lr=self._sim_lr)
         all_cand_params = [p for p in self._all_params]
         for j, i in enumerate(shared_params_idxs):
@@ -835,8 +835,8 @@ class MetaMultiTaskTrainer():
         set_model_params(model_copy, all_cand_params)
 
         # do a forward pass of the model copy and backward to get gradients
-        out = model_copy(down_task, down_batch)
-        out['loss'].backward(create_graph=True, retain_graph=True)
+        down_out = model_copy(down_task, down_batch)
+        down_out['loss'].backward(create_graph=True, retain_graph=True)
 
         # gather the model copy gradients and backwards propagate them
         cpy_grads = [w.grad for w in model_copy.parameters()] # grads of mdl cpy params
@@ -847,7 +847,7 @@ class MetaMultiTaskTrainer():
         meta_grads = autograd.grad(cand_params_w_grad, shared_params,
                                    grad_outputs=cpy_grads_nonnone, create_graph=False,
                                    allow_unused=True)
-        return meta_grads, sim_grads, out2, sim_out1
+        return meta_grads, up_grads, down_out, up_out
 
     def _assign_gradients(self, grads, sim_gradss, multistep_scale):
         """ Assign gradients and pssible simulated gradients
