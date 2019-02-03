@@ -308,6 +308,10 @@ register_task('edges-dpr', rel_path='edges/dpr',
                    'val': "dev.edges.json",
                    'test': "test.edges.json",
                }, is_symmetric=False)(EdgeProbingTask)
+
+##
+# New or experimental tasks.
+##
 # Relation classification on TACRED. 42 labels.
 register_task('edges-rel-tacred', rel_path='edges/tacred/rel',
                label_file="labels.txt", files_by_split={
@@ -316,6 +320,8 @@ register_task('edges-rel-tacred', rel_path='edges/tacred/rel',
                    'test': "test.json",
                }, is_symmetric=False)(EdgeProbingTask)
 # Entity classification on TACRED. 17 labels.
+# NOTE: these are probably silver labels from CoreNLP,
+# so this is of limited use as a target.
 register_task('edges-ner-tacred', rel_path='edges/tacred/entity',
                label_file="labels.txt", files_by_split={
                    'train': "train.json",
