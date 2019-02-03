@@ -5,6 +5,11 @@ import pandas as pd
 
 from typing import Dict, Iterable, Sequence, Union
 
+def load_lines(filename: str) -> Iterable[str]:
+    ''' Load text data, yielding each line. '''
+    with open(filename) as fd:
+        for line in fd:
+            yield line.strip()
 
 def load_json_data(filename: str) -> Iterable:
     ''' Load JSON records, one per line. '''
