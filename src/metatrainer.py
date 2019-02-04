@@ -51,26 +51,26 @@ def build_trainer(args, task_names, run_dir, metric_should_decrease=True):
     opt_params = build_optimizer_params(args)
     schd_params = build_scheduler_params(args, metric_should_decrease)
 
-    trainer = MetaMultiTaskTrainer(opt_params=opt_params,
-                                   schd_params=schd_params,
-                                   patience=_get_task_attr('patience'),
-                                   val_interval=_get_task_attr('val_interval'),
-                                   max_vals=_get_task_attr('max_vals'),
-                                   serialization_dir=run_dir,
-                                   cuda_device=_get_task_attr('cuda'),
-                                   max_grad_norm=_get_task_attr('max_grad_norm'),
-                                   lr_decay=_get_task_attr('lr_decay_factor'),
-                                   min_lr=_get_task_attr('min_lr'),
-                                   keep_all_checkpoints=_get_task_attr('keep_all_checkpoints'),
-                                   val_data_limit=_get_task_attr('val_data_limit'),
-                                   dec_val_scale=_get_task_attr('dec_val_scale'),
-                                   training_data_fraction=_get_task_attr('training_data_fraction'),
-                                   sim_lr=_get_task_attr('sim_lr'),
-                                   max_sim_grad_norm=_get_task_attr('max_sim_grad_norm'),
-                                   slow_params_approx=_get_task_attr('slow_params_approx'),
-                                   only_pos_reg=_get_task_attr('only_pos_reg'),
-                                   approx_term=_get_task_attr('approx_term'),
-                                   one_sided_update=_get_task_attr('one_sided_update'))
+    trainer = MetaPairTaskTrainer(opt_params=opt_params,
+                                  schd_params=schd_params,
+                                  patience=_get_task_attr('patience'),
+                                  val_interval=_get_task_attr('val_interval'),
+                                  max_vals=_get_task_attr('max_vals'),
+                                  serialization_dir=run_dir,
+                                  cuda_device=_get_task_attr('cuda'),
+                                  max_grad_norm=_get_task_attr('max_grad_norm'),
+                                  lr_decay=_get_task_attr('lr_decay_factor'),
+                                  min_lr=_get_task_attr('min_lr'),
+                                  keep_all_checkpoints=_get_task_attr('keep_all_checkpoints'),
+                                  val_data_limit=_get_task_attr('val_data_limit'),
+                                  dec_val_scale=_get_task_attr('dec_val_scale'),
+                                  training_data_fraction=_get_task_attr('training_data_fraction'),
+                                  sim_lr=_get_task_attr('sim_lr'),
+                                  max_sim_grad_norm=_get_task_attr('max_sim_grad_norm'),
+                                  slow_params_approx=_get_task_attr('slow_params_approx'),
+                                  only_pos_reg=_get_task_attr('only_pos_reg'),
+                                  approx_term=_get_task_attr('approx_term'),
+                                  one_sided_update=_get_task_attr('one_sided_update'))
     return trainer
 
 
@@ -103,7 +103,7 @@ def set_model_params(model, params):
         old_p.data = new_p
 
 
-class MetaMultiTaskTrainer():
+class MetaPairTaskTrainer():
     def __init__(self, opt_params, schd_params,
                  patience=2, val_interval=100, max_vals=50,
                  serialization_dir=None, cuda_device=-1,
@@ -341,11 +341,10 @@ class MetaMultiTaskTrainer():
             - weight
             - n_samples
         """
+        samples_src = [tasks[1] for _ in range(n_samples)]
+        samples_trg = [tasks[0] for _ in range(n_samples)]
         #samples_src = random.choices(tasks, weights=sample_weights, k=validation_interval)
         #samples_trg = random.choices(tasks, weights=sample_weights, k=validation_interval)
-        # TODO(Alex): this is a hack to make sure tasks are different each time
-        samples_src = [tasks[0] for _ in range(n_samples)]
-        samples_trg = [tasks[1] for _ in range(n_samples)]
         return samples_src, samples_trg
 
     def train(self, model, model_copy, tasks,
@@ -380,15 +379,17 @@ class MetaMultiTaskTrainer():
         -------
         Validation results
         """
+
+        assert_for_log(len(tasks) == 2, "%s only compatible with two tasks!")
+
         if self._cuda_device >= 0:
             model = model.cuda(self._cuda_device)
             model_copy = model_copy.cuda(self._cuda_device)
         self._model = model
         self._model_copy = model_copy
-
+        self._shared_optimizer = shared_optimizer
         validation_interval = self._val_interval
         assert_for_log(validation_interval % 2 == 0, "Need an even validation interval!")
-        self._shared_optimizer = shared_optimizer
         task_infos, metric_infos = self._setup_task_tracking(tasks, batch_size, params_to_train,
                                                              shared_optimizer, phase)
 
@@ -423,6 +424,10 @@ class MetaMultiTaskTrainer():
 
         all_tr_metrics = {}
         log.info("Beginning training. Stopping metric: %s", stop_metric)
+        if self._one_sided_update:
+            log.info("\tfrom task %s to task %s", tasks[1].name, tasks[0].name)
+        else:
+            log.info("\tbetween task %s and task %s", tasks[1].name, tasks[0].name)
         while not should_stop:
             model.train()
             src_task = samples_src[n_update % (validation_interval)]
@@ -473,19 +478,19 @@ class MetaMultiTaskTrainer():
                 else: # exact case
                     # NOTE(AW): I'm pretty sure the autograd.grad calls don't need create_graph b/c I already
                     #           created graph on the backwards calls
-                    # Get gradients of src_task after simulating trg task update
-                    src_grads, sim_trg_grads, trg_out = \
+                    # Get gradients wrt trg task (after simulating update on src task)
+                    trg_grads, sim_src_grads, trg_out, sim_src_out = \
                             self._get_meta_gradients(up_task=src_task, up_batch=src_batch,
-                                                     down_task=src_task, down_batch=src_batch)
+                                                     down_task=trg_task, down_batch=trg_batch)
                     if not self._one_sided_update:
-                        trg_grads, sim_src_grads, src_out = \
+                        src_grads, sim_trg_grads, src_out, sim_trg_out = \
                                 self._get_meta_gradients(up_task=trg_task, up_batch=trg_batch,
-                                                         down_task=trg_task, down_batch=trg_batch)
+                                                         down_task=src_task, down_batch=src_batch)
                         gradients = [trg_grads, src_grads]
                         sim_gradss = [sim_trg_grads, sim_src_grads] if multistep_loss else []
                     else:
-                        gradients = [src_grads]
-                        sim_gradss = [sim_trg_grads] if multistep_loss else []
+                        gradients = [trg_grads]
+                        sim_gradss = [sim_src_grads] if multistep_loss else []
                         src_out = sim_src_out
                     self._assign_gradients(gradients, sim_gradss, multistep_scale)
 

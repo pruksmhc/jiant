@@ -2,7 +2,7 @@
 
 source user_config.sh
 seed=222
-gpuid=7
+gpuid=1
 
 SMALLLM_CONVS='[(512, 3)] * 20'
 BASELM_CONVS='[(1268, 4)] * 13'
@@ -23,7 +23,7 @@ function meta_experiment() {
 }
 
 function debug() {
-    python -m ipdb main.py --config config/meta.conf --overrides "exp_name = metalearn-v2, run_name = debug-env, max_vals = 3, val_interval = 100, do_train = 1, train_for_eval = 0, train_tasks = \"wiki2,mnli\", eval_tasks = \"none\", do_eval = 0, cuda = ${gpuid}, metatrain = 1, slow_params_approx = 0, sent_enc = convlm, d_hid = 512, mnli_pair_attn = 0, snli_pair_attn = 0, multistep_loss = 1, multistep_scale = 0.1"
+    python main.py --config config/meta.conf --overrides "random_seed = ${seed}, exp_name = metalearn-v2, run_name = debug-update, max_vals = 3, val_interval = 100, do_train = 1, train_for_eval = 0, train_tasks = \"wiki103,mnli\", eval_tasks = \"none\", do_eval = 0, cuda = ${gpuid}, sent_enc = convlm, d_hid = 512, mnli_pair_attn = 0, snli_pair_attn = 0, metatrain = 1, slow_params_approx = 0, one_sided_update = 1, multistep_loss = 1, multistep_scale = 0.5, lr = .000001, sim_lr = .000001, load_model = 0"
 }
 
 # Wiki103 + MNLI + fine-tuning
