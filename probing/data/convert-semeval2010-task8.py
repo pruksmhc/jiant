@@ -9,7 +9,7 @@
 # Usage:
 #   ./convert-semeval2010-task8.py \
 #       -i <semeval_dir>/SemEval2010_task8_<split>/<filename>.txt \
-#       -o /path/to/probing/data/semeval-2010-task8
+#       -o /path/to/probing/data/semeval-2010-task8/<filename>.json
 #
 
 import sys
@@ -108,22 +108,15 @@ def convert_file(fname: str, target_fname: str):
 
 def main(args):
     parser = argparse.ArgumentParser()
-    parser.add_argument('-i', dest='inputs', type=str, nargs="+",
-                        help="Input files (JSON) for TACRED splits.")
-    parser.add_argument('-o', dest='output_dir', type=str, required=True,
-                        help="Output directory.")
+    parser.add_argument('-i', dest='input', type=str, required=True,
+                        help="Input .TXT file with SemEval examples.")
+    parser.add_argument('-o', dest='output', type=str, required=True,
+                        help="Output .json file.")
     args = parser.parse_args(args)
 
-    if not os.path.isdir(args.output_dir):
-        os.mkdir(args.output_dir)
-
     pd.options.display.float_format = '{:.2f}'.format
-    for fname in args.inputs:
-        log.info("Converting %s", fname)
-        fname_base = os.path.basename(fname).lower()
-        target_fname = os.path.join(args.output_dir,
-                                    os.path.splitext(fname_base)[0] + ".json")
-        convert_file(fname, target_fname)
+    log.info("Converting %s", args.input)
+    convert_file(args.input, args.output)
 
 
 if __name__ == '__main__':
