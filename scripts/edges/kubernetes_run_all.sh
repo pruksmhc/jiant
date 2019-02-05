@@ -85,18 +85,18 @@ function kuberun() {
 ##
 
 declare -a ALL_TASKS
-ALL_TASKS+=( "spr1" )
-ALL_TASKS+=( "spr2" )
-ALL_TASKS+=( "dpr" )
-ALL_TASKS+=( "dep-labeling-ewt" )
-ALL_TASKS+=( "nonterminal-ontonotes" )
-ALL_TASKS+=( "pos-ontonotes" )
-ALL_TASKS+=( "ner-ontonotes" )
-ALL_TASKS+=( "srl-conll2012" )
-ALL_TASKS+=( "coref-ontonotes-conll" )
+# ALL_TASKS+=( "spr1" )
+# ALL_TASKS+=( "spr2" )
+# ALL_TASKS+=( "dpr" )
+# ALL_TASKS+=( "dep-labeling-ewt" )
+# ALL_TASKS+=( "nonterminal-ontonotes" )
+# ALL_TASKS+=( "pos-ontonotes" )
+# ALL_TASKS+=( "ner-ontonotes" )
+# ALL_TASKS+=( "srl-conll2012" )
+# ALL_TASKS+=( "coref-ontonotes-conll" )
 ALL_TASKS+=( "rel-semeval" )
-ALL_TASKS+=( "rel-tacred" )
-ALL_TASKS+=( "ner-tacred" )
+# ALL_TASKS+=( "rel-tacred" )
+# ALL_TASKS+=( "ner-tacred" )
 echo "All tasks to run: ${ALL_TASKS[@]}"
 
 if [[ $MODE == "delete" ]]; then
@@ -135,7 +135,7 @@ for task in "${ALL_TASKS[@]}"
 do
     # kuberun openai-$task     "openai_exp edges-$task"
     kuberun openai-cat-$task "openai_cat_exp edges-$task"
-    kuberun openai-bwb-$task "openai_bwb_exp edges-$task"
+    # kuberun openai-bwb-$task "openai_bwb_exp edges-$task"
 
     kuberun bert-base-uncased-cat-$task    "bert_cat_exp edges-$task base-uncased"
     kuberun bert-large-uncased-cat-$task   "bert_cat_exp edges-$task large-uncased"
