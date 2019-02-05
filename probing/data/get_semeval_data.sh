@@ -11,7 +11,7 @@ fi
 
 # Download link for SemEval 2010 Task 8 data.
 # This is a Google Drive link, but it seems to be the official one.
-# FOr the website, see
+# For the website, see
 # https://docs.google.com/document/d/1QO_CnmvNRnYwNWu1-QCAeR5ToQYkXUqFeAJbdEhsq7w/preview
 SEMEVAL_URL="https://drive.google.com/uc?authuser=0&id=0B_jQiLugGTAkMDQ5ZjZiMTUtMzQ1Yy00YWNmLWJlZDYtOWY1ZDMwY2U4YjFk&export=download"
 

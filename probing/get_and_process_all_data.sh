@@ -95,7 +95,7 @@ function get_ud() {
 
 function get_tacred() {
     ## TACRED relation classification
-    ## Gives tacred/{split}.{task}.json, where split = {train, dev, test}
+    ## Gives tacred/{task}/{split}.json, where split = {train, dev, test}
     ## and task = {rel, entity}
     mkdir $OUTPUT_DIR/tacred
     python $HERE/data/convert-tacred.py \
@@ -105,8 +105,17 @@ function get_tacred() {
     preproc_task $OUTPUT_DIR/tacred/entity
 }
 
+function get_semeval() {
+    ## SemEval 2010 Task 8 relation classification
+    ## Gives semeval/{split}.json, where split = {train.0.85, dev, test}
+    mkdir $OUTPUT_DIR/semeval
+    bash $HERE/data/get_semeval_data.sh $OUTPUT_DIR/semeval
+    preproc_task $OUTPUT_DIR/semeval
+}
+
 get_ontonotes
 get_spr_dpr
 get_ud
 get_tacred
+get_semeval
 
