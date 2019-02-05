@@ -94,8 +94,8 @@ declare -a ALL_TASKS
 # ALL_TASKS+=( "ner-ontonotes" )
 # ALL_TASKS+=( "srl-conll2012" )
 # ALL_TASKS+=( "coref-ontonotes-conll" )
-ALL_TASKS+=( "rel-semeval" )
-# ALL_TASKS+=( "rel-tacred" )
+# ALL_TASKS+=( "rel-semeval" )
+ALL_TASKS+=( "rel-tacred" )
 # ALL_TASKS+=( "ner-tacred" )
 echo "All tasks to run: ${ALL_TASKS[@]}"
 
