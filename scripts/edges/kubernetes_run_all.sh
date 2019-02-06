@@ -97,6 +97,9 @@ ALL_TASKS+=( "coref-ontonotes-conll" )
 ALL_TASKS+=( "rel-semeval" )
 ALL_TASKS+=( "rel-tacred" )
 ALL_TASKS+=( "ner-tacred" )
+ALL_TASKS+=( "coref-gap" )
+ALL_TASKS+=( "coref-gap-ontonotes" )
+ALL_TASKS+=( "noun-verb" )
 echo "All tasks to run: ${ALL_TASKS[@]}"
 
 if [[ $MODE == "delete" ]]; then
