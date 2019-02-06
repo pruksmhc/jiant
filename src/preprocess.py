@@ -43,7 +43,7 @@ SOS_TOK, EOS_TOK = "<SOS>", "<EOS>"  # NOTE: these are not that same as AllenNLP
 SPECIALS = [SOS_TOK, EOS_TOK]  # NOTE: pad and unk tokens are created by AllenNLP vocabs by default
 UNK_TOK = "@@UNKNOWN@@"  # AllenNLP unk token
 
-ALL_SPLITS = ['train', 'val', 'test']
+ALL_SPLITS = ['train', 'val', 'test', 'train_in_domain',  'val_in_domain', 'val_out_domain']
 
 
 def _get_serialized_record_path(task_name, split, preproc_dir):
@@ -335,6 +335,10 @@ def build_tasks(args):
     target_tasks = []
     for task in tasks:
         # Replace lists of instances with lazy generators from disk.
+        if task.name == 'cola':
+            task.val_data_in_domain = _get_instance_generator(task.name, "val_in_domain", preproc_dir)
+            task.val_data_out_domain = _get_instance_generator(task.name, "val_out_domain", preproc_dir)
+            task.train_data_in_domain = _get_instance_generator(task.name, "train_in_domain", preproc_dir)
         task.val_data = _get_instance_generator(task.name, "val", preproc_dir)
         task.test_data = _get_instance_generator(task.name, "test", preproc_dir)
         # When using training_data_fraction, we need modified iterators for use

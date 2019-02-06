@@ -351,12 +351,22 @@ class CoLATask(SingleClassificationTask):
         '''Load the data'''
         tr_data = load_tsv(os.path.join(path, "train.tsv"), max_seq_len,
                            s1_idx=3, s2_idx=None, targ_idx=1)
+        tr_data_in_domain = load_tsv(os.path.join(path, "original/raw/in_domain_train.tsv"), max_seq_len,
+                           s1_idx=3, s2_idx=None, targ_idx=1)
         val_data = load_tsv(os.path.join(path, "dev.tsv"), max_seq_len,
+                            s1_idx=3, s2_idx=None, targ_idx=1)
+        val_data_in_domain = load_tsv(os.path.join(path, "original/raw/in_domain_dev.tsv"), max_seq_len,
+                            s1_idx=3, s2_idx=None, targ_idx=1)
+        val_data_out_domain = load_tsv(os.path.join(path, "original/raw/out_of_domain_dev.tsv"), max_seq_len,
                             s1_idx=3, s2_idx=None, targ_idx=1)
         te_data = load_tsv(os.path.join(path, 'test.tsv'), max_seq_len,
                            s1_idx=1, s2_idx=None, targ_idx=None, idx_idx=0, skip_rows=1)
+
         self.train_data_text = tr_data
+        self.train_in_domain_data_text = tr_data_in_domain
         self.val_data_text = val_data
+        self.val_in_domain_data_text = val_data_in_domain
+        self.val_out_domain_data_text = val_data_out_domain
         self.test_data_text = te_data
         log.info("\tFinished loading CoLA.")
 
