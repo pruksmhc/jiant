@@ -13,16 +13,17 @@ function fetch_data() {
   mkdir -p $TARGET_DIR/raw
   pushd $TARGET_DIR/raw
 
-  git clone https://github.com/google-research-datasets/gap-coreference.git
+  git clone https://github.com/google-research-datasets/noun-verb.git
 
   popd
 }
 
 fetch_data
 
-# Convert GAP to edge probing JSON format.
-for split in "gap-development" "gap-test" "gap-validation"; do
-    python $THIS_DIR/convert-gap.py -i "${TARGET_DIR}/raw/gap-coreference/${split}.tsv" \
+# Convert Noun-Verb (sparse POS targets) to edge probing JSON format.
+for split in "train" "dev" "test"; do
+    python $THIS_DIR/convert-noun-verb.py \
+        -i "${TARGET_DIR}/raw/noun-verb/${split}.conll" \
         -o "${TARGET_DIR}/${split}.json"
 done
 

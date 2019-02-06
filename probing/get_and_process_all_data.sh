@@ -115,7 +115,7 @@ function get_semeval() {
 
 function get_gap() {
     ## GAP coreference dataset
-    ## Gives gap/gap-{split}.json, 
+    ## Gives gap/gap-{split}.json,
     ## where split = {development, validation, test}
     mkdir $OUTPUT_DIR/gap
     bash $HERE/data/get_gap_data.sh $OUTPUT_DIR/gap
@@ -125,6 +125,15 @@ function get_gap() {
     cp -R $OUTPUT_DIR/ontonotes/coref $OUTPUT_DIR/gap/ontonotes_coref
 }
 
+function get_noun_verb() {
+    ## Noun-Verb ambiguity dataset
+    ## (Elkahky et al. 2018, https://aclweb.org/anthology/D18-1277)
+    ## Gives noun_verb/{split}.json, where split = {train, dev, test}
+    mkdir $OUTPUT_DIR/noun_verb
+    bash $HERE/data/get_noun_verb_data.sh $OUTPUT_DIR/noun_verb
+    preproc_task $OUTPUT_DIR/noun_verb
+}
+
 get_ontonotes
 get_spr_dpr
 get_ud
@@ -132,4 +141,5 @@ get_ud
 get_tacred
 get_semeval
 get_gap
+get_noun_verb
 
