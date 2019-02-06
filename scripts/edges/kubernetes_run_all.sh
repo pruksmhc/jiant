@@ -95,8 +95,10 @@ declare -a ALL_TASKS
 # ALL_TASKS+=( "srl-conll2012" )
 # ALL_TASKS+=( "coref-ontonotes-conll" )
 # ALL_TASKS+=( "rel-semeval" )
-ALL_TASKS+=( "rel-tacred" )
+# ALL_TASKS+=( "rel-tacred" )
 # ALL_TASKS+=( "ner-tacred" )
+ALL_TASKS+=( "coref-gap" )
+ALL_TASKS+=( "coref-gap-ontonotes" )
 echo "All tasks to run: ${ALL_TASKS[@]}"
 
 if [[ $MODE == "delete" ]]; then
