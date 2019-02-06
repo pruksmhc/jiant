@@ -113,9 +113,23 @@ function get_semeval() {
     preproc_task $OUTPUT_DIR/semeval
 }
 
+function get_gap() {
+    ## GAP coreference dataset
+    ## Gives gap/gap-{split}.json, 
+    ## where split = {development, validation, test}
+    mkdir $OUTPUT_DIR/gap
+    bash $HERE/data/get_gap_data.sh $OUTPUT_DIR/gap
+    preproc_task $OUTPUT_DIR/gap
+
+    ## Also copy OntoNotes as (optional) training data.
+    cp -R $OUTPUT_DIR/ontonotes/coref $OUTPUT_DIR/gap/ontonotes_coref
+}
+
 get_ontonotes
 get_spr_dpr
 get_ud
+
 get_tacred
 get_semeval
+get_gap
 
