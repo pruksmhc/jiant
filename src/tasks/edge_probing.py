@@ -335,6 +335,23 @@ register_task('edges-ner-tacred', rel_path='edges/tacred/entity',
                    'val': "dev.json",
                    'test': "test.json",
                }, single_sided=True)(EdgeProbingTask)
+# GAP coreference, trained on GAP development set (4k targets).
+register_task('edges-coref-gap',
+               rel_path='edges/gap',
+               label_file="labels.txt", files_by_split={
+                   'train': "gap-development.json",
+                   'val': "gap-validation.json",
+                   'test': "gap-test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
+# GAP coreference, trained on OntoNotes.
+register_task('edges-coref-gap-ontonotes',
+               rel_path='edges/gap',
+               label_file="labels.txt", files_by_split={
+                   'train': "ontonotes/coref/coref_conll_ontonotes_en_train.json",
+                   'val': "gap-validation.json",
+                   'test': "gap-test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
+
 
 ##
 # Older tasks or versions for backwards compatibility.
