@@ -422,8 +422,6 @@ class SamplingMultiTaskTrainer:
         all_tr_metrics = {}
         log.info("Beginning training. Stopping metric: %s", stop_metric)
         epoch = 1
-        all_val_metrics, should_save, new_best_macro = self._validate(
-                            epoch, tasks, batch_size, periodic_save=(phase != "eval"))
         while not should_stop:
             self._model.train()
             task = samples[n_pass % validation_interval]  # randomly select a task
@@ -572,7 +570,7 @@ class SamplingMultiTaskTrainer:
             log.info('%s, %d, %s', metric, best_epoch, all_metrics_str)
         return results
 
-    def _validate_helper(self, task, task_infos, task_name, val_data_attr, batch_size, all_val_metrics, n_exampmles_overall):
+    def _validate_helper(self, task, task_infos, task_name, val_data_attr, batch_size, all_val_metrics, n_examples_overall):
         n_examples, batch_num = 0, 0
         task_info = task_infos[task.name]
         # to speed up training, we evaluate on a subset of validation data
@@ -639,13 +637,12 @@ class SamplingMultiTaskTrainer:
 
         # Get validation numbers for each task
         for task in tasks:
-            import pdb; pdb.set_trace()
             n_examples_overall, task_infos = self._validate_helper(task, task_infos, 'cola', 'val_data', batch_size, all_val_metrics, n_examples_overall)
             if task.name == "cola":
                 all_val_metrics["cola_in"] = 0.0
                 all_val_metrics["cola_out"] = 0.0
-                n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, 'cola_in', 'val_in_domain_data', batch_size, all_val_metrics, n_examples_overall)
-                n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, 'cola_out', 'val_out_domain_data', batch_size, all_val_metrics, n_examples_overall)
+                n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, 'cola_in', 'val_data_in_domain', batch_size, all_val_metrics, n_examples_overall)
+                n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, 'cola_out', 'val_data_out_domain', batch_size, all_val_metrics, n_examples_overall)
 
         all_val_metrics['micro_avg'] /= n_examples_overall
         all_val_metrics['macro_avg'] /= len(tasks)
