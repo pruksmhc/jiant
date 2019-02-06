@@ -621,7 +621,7 @@ class SamplingMultiTaskTrainer:
         # Reset training progress
         task_info['n_batches_since_val'] = 0
         task_info['loss'] = 0
-        return n_examples_overall, task_infos, vall_val_metrics
+        return n_examples_overall, task_infos, all_val_metrics
 
     def _validate(self, epoch, tasks, batch_size, periodic_save=True):
         ''' Validate on all tasks and return the results and whether to save this epoch or not
@@ -633,25 +633,26 @@ class SamplingMultiTaskTrainer:
         all_val_metrics = {("%s_loss" % task.name): 0.0 for task in tasks}
         all_val_metrics["macro_avg"] = 0.0
         all_val_metrics["micro_avg"] = 0.0
-        n_examples_overall = 0.0
-
+        n_examples_overall = 1.0
+        num_eval_tasks = 1
         # Get validation numbers for each task
         for task in tasks:
-            n_examples_overall, task_infos = self._validate_helper(task, task_infos, 'cola', 'val_data', batch_size, all_val_metrics, n_examples_overall)
+            n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, 'cola', 'val_data', batch_size, all_val_metrics, n_examples_overall)
+            num_eval_tasks += 1
             if task.name == "cola":
                 all_val_metrics["cola_in"] = 0.0
                 all_val_metrics["cola_out"] = 0.0
                 n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, 'cola_in', 'val_data_in_domain', batch_size, all_val_metrics, n_examples_overall)
                 n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, 'cola_out', 'val_data_out_domain', batch_size, all_val_metrics, n_examples_overall)
+                num_eval_tasks += 2
 
         all_val_metrics['micro_avg'] /= n_examples_overall
-        all_val_metrics['macro_avg'] /= len(tasks)
+        all_val_metrics['macro_avg'] /= num_eval_tasks
 
         # Track per task patience
         should_save = periodic_save  # whether to save this epoch or not.
         # Currently we save every validation in the main training runs.
         new_best_macro = False  # whether this epoch is a new best
-
         for task in tasks + ['micro', 'macro']:
             if task in ['micro', 'macro']:
                 metric = "%s_avg" % task
