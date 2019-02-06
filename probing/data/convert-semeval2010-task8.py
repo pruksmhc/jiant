@@ -94,17 +94,10 @@ def record_from_triple(sentence_line, label, comment_line):
     record['targets'] = [target]
     return record
 
-def write_file_and_print_stats(records, target_fname):
-    stats = utils.EdgeProbingDatasetStats()
-    records = stats.passthrough(records)
-    utils.write_json_data(target_fname, records)
-    log.info("Wrote examples to %s", target_fname)
-    log.info(stats.format())
-
 def convert_file(fname: str, target_fname: str):
     triples = parse_lines(utils.load_lines(fname))
     records = (record_from_triple(*t) for t in triples)
-    write_file_and_print_stats(records, target_fname)
+    utils.write_file_and_print_stats(records, target_fname)
 
 def main(args):
     parser = argparse.ArgumentParser()
