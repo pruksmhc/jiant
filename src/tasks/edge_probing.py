@@ -351,6 +351,13 @@ register_task('edges-coref-gap-ontonotes',
                    'val': "gap-validation.json",
                    'test': "gap-test.json",
                }, is_symmetric=False)(EdgeProbingTask)
+# Noun-Verb ambiguity (sparse POS targets). 2 labels.
+register_task('edges-noun-verb', rel_path='edges/noun_verb',
+               label_file="labels.txt", files_by_split={
+                   'train': "train.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, single_sided=True)(EdgeProbingTask)
 
 
 ##
