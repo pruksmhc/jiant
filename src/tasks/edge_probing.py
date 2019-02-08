@@ -310,6 +310,57 @@ register_task('edges-dpr', rel_path='edges/dpr',
                }, is_symmetric=False)(EdgeProbingTask)
 
 ##
+# New or experimental tasks.
+##
+# Relation classification on SemEval 2010 Task8. 19 labels.
+register_task('edges-rel-semeval', rel_path='edges/semeval',
+               label_file="labels.txt", files_by_split={
+                   'train': "train.0.85.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
+# Relation classification on TACRED. 42 labels.
+register_task('edges-rel-tacred', rel_path='edges/tacred/rel',
+               label_file="labels.txt", files_by_split={
+                   'train': "train.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
+# Entity classification on TACRED. 17 labels.
+# NOTE: these are probably silver labels from CoreNLP,
+# so this is of limited use as a target.
+register_task('edges-ner-tacred', rel_path='edges/tacred/entity',
+               label_file="labels.txt", files_by_split={
+                   'train': "train.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, single_sided=True)(EdgeProbingTask)
+# GAP coreference, trained on GAP development set (4k targets).
+register_task('edges-coref-gap',
+               rel_path='edges/gap',
+               label_file="labels.txt", files_by_split={
+                   'train': "gap-development.json",
+                   'val': "gap-validation.json",
+                   'test': "gap-test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
+# GAP coreference, trained on OntoNotes.
+register_task('edges-coref-gap-ontonotes',
+               rel_path='edges/gap',
+               label_file="labels.txt", files_by_split={
+                   'train': "ontonotes/coref/coref_conll_ontonotes_en_train.json",
+                   'val': "gap-validation.json",
+                   'test': "gap-test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
+# Noun-Verb ambiguity (sparse POS targets). 2 labels.
+register_task('edges-noun-verb', rel_path='edges/noun_verb',
+               label_file="labels.txt", files_by_split={
+                   'train': "train.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, single_sided=True)(EdgeProbingTask)
+
+
+##
 # Older tasks or versions for backwards compatibility.
 ##
 # SRL CoNLL 2005, formulated as an edge-labeling task.
