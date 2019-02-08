@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 
-# Script to convert GAP coreference data (https://arxiv.org/pdf/1810.05201.pdf) 
+# Script to convert GAP coreference data (https://arxiv.org/pdf/1810.05201.pdf)
 # to edge probing format.
-# 
-# Download the data from 
+#
+# Download the data from
 # https://github.com/google-research-datasets/gap-coreference
 #
 # Usage:
@@ -11,11 +11,11 @@
 #       -i /path/to/gap-coreference/<filename>.tsv \
 #       -o /path/to/probing/data/gap/<filename>.json
 #
-# The GAP dataset provides targets as character offsets and text strings. 
+# The GAP dataset provides targets as character offsets and text strings.
 # We convert this to token indices by splitting on spaces, and finding the
 # minimal span of tokens that includes the char span
-# (offset + len(target_text)). Note that this may be a superstring of the 
-# actual target, since we don't attempt to separate punctuation from adjacent 
+# (offset + len(target_text)). Note that this may be a superstring of the
+# actual target, since we don't attempt to separate punctuation from adjacent
 # tokens.
 
 import sys
@@ -39,10 +39,23 @@ SPACE_TOKENIZER = SpaceTokenizer()
 
 from typing import Dict, Tuple, List, Iterable
 
-def char_span_to_token_span(spans: List[Tuple[int, int]], 
+# Based on
+# https://github.com/google-research-datasets/gap-coreference/blob/master/constants.py
+# Mapping of (lowercased) pronoun form to gender value. Note that reflexives
+# are not included in GAP, so do not appear here.
+PRONOUNS = {
+    'she': "FEMININE",
+    'her': "FEMININE",
+    'hers': "FEMININE",
+    'he': "MASCULINE",
+    'his': "MASCULINE",
+    'him': "MASCULINE",
+}
+
+def char_span_to_token_span(spans: List[Tuple[int, int]],
                             char_start: int, char_end: int) -> Tuple[int, int]:
-    """ Map a character span to the minimal containing token span. 
-    
+    """ Map a character span to the minimal containing token span.
+
     Args:
         spans: a list of end-exclusive character spans for each token
         char_start: starting character offset
@@ -57,27 +70,27 @@ def char_span_to_token_span(spans: List[Tuple[int, int]],
     tok_e = max(i for i, s in enumerate(spans) if s[0] <= char_end)
     return (tok_s, tok_e + 1)  # end-exclusive
 
-def row_to_record(row: pd.Series) -> Dict:  
-    """ Convert a TSV row into an edge probing record. """  
+def row_to_record(row: pd.Series) -> Dict:
+    """ Convert a TSV row into an edge probing record. """
     record = {}
     record['text'] = row['Text']
     record['info'] = {'id': row["ID"], 'url': row["URL"]}
     record['targets'] = []
-    
+
     spans = tuple(SPACE_TOKENIZER.span_tokenize(row['Text']))
     def _get_span(prefix):
         """ Get the token span for a given prefix (Pronoun, A, B). """
         char_start = row[prefix + "-offset"]
         char_end = char_start + len(row[prefix])
         return char_span_to_token_span(spans, char_start, char_end)
-    
+
     def _validate_span(token_span, target_text):
         """ Make sure the expected text is a substring of the returned span. """
         cs = spans[token_span[0]][0]
         ce = spans[token_span[1] - 1][1]
         covered_text = row['Text'][cs:ce]
         assert target_text in covered_text
-    
+
     pronoun_span = _get_span("Pronoun")
     for target_name in ['A', 'B']:
         target = {}
@@ -85,11 +98,14 @@ def row_to_record(row: pd.Series) -> Dict:
         target['span2'] = _get_span(target_name)
         _validate_span(target['span2'], row[target_name])
         target['label'] = str(int(row[target_name + "-coref"]))
+
+        pronoun = row['Pronoun']
         target['info'] = {'name': target_name,
                           'text': row[target_name],
-                          'pronoun_text': row['Pronoun']}
+                          'pronoun_text': pronoun,
+                          'pronoun_gender': PRONOUNS[pronoun.lower()]}
         record['targets'].append(target)
-        
+
     return record
 
 def convert_file(fname: str, target_fname: str):
