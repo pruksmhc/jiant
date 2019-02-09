@@ -189,11 +189,14 @@ class Predictions(object):
              "preds.proba": preds_proba}
         # Repeat some metadata fields if available.
         # Use these for stratified scoring.
-        if 'info.height' in df.columns:
-            log.info("info.height field detected; copying to long-form "
-                     "DataFrame.")
-            d['info.height'] = _expand_runs(df['info.height'],
-                                            len(self.all_labels))
+        def _add_standard_stratifier(name):
+            if name in df.columns:
+                log.info(f"{name} field detected; copying to long-form "
+                         "DataFrame.")
+                d[name] = _expand_runs(df[name], len(self.all_labels))
+        _add_standard_stratifier("info.height")
+        _add_standard_stratifier("info.pronoun_gender")
+
         if 'span2' in df.columns:
             log.info("span2 detected; adding span_distance to long-form "
                      "DataFrame.")
@@ -274,22 +277,29 @@ class Predictions(object):
 
         ##
         # Compute stratified scores by special fields
-        for field in ['info.height', 'span_distance']:
+        def _score_stratifier(field, by_label=False):
             if field not in long_df.columns:
-                continue
+                return score_df
             log.info("Found special field '%s' with %d unique values.",
                      field, len(long_df[field].unique()))
-            gb = long_df.groupby(by=[field])
+            by_cols = [field, 'label'] if by_label else [field]
+            gb = long_df.groupby(by=by_cols)
             records = []
             for key, idxs in gb.groups.items():
                 sub_df = long_df.loc[idxs]
                 record = self.score_long_df(sub_df)
-                record['label'] = "_{:s}_{:s}_".format(field, str(key))
+                fmt_key = "_".join(key) if len(by_cols) > 1 else str(key)
+                record['label'] = "_{:s}_{:s}_".format(field, fmt_key)
                 record['stratifier'] = field
-                record['stratum_key'] = key
+                record['stratum_key'] = fmt_key
                 records.append(record)
-            score_df = score_df.append(pd.DataFrame.from_records(records),
-                                       ignore_index=True, sort=False)
+            return score_df.append(pd.DataFrame.from_records(records),
+                                   ignore_index=True, sort=False)
+
+        #  for field in ['info.height', 'info.pronoun_gender', 'span_distance']:
+        score_df = _score_stratifier('info.height')
+        score_df = _score_stratifier('info.pronoun_gender', by_label=True)
+        score_df = _score_stratifier('span_distance')
 
         ##
         # Move "label" column to the beginning.
