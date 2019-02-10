@@ -171,7 +171,7 @@ function bert_mix_exp() {
 function bert_mix_k_exp() {
     # Run BERT with ELMo-style scalar mixing across the first K layers.
     # Usage: bert_mix_k_exp <task_name> <bert_model_name> <k>
-    OVERRIDES="exp_name=bert-${2}-mix_${3}-${1}, run_name=run"
+    OVERRIDES="exp_name=bert-${2}-mix-${3}-${1}, run_name=run"
     OVERRIDES+=", target_tasks=$1"
     OVERRIDES+=", bert_model_name=bert-$2"
     OVERRIDES+=", bert_embeddings_mode=mix"
@@ -182,7 +182,7 @@ function bert_mix_k_exp() {
 function bert_at_k_exp() {
     # Run BERT and probe layer K.
     # Usage: bert_at_k_exp <task_name> <bert_model_name> <k>
-    OVERRIDES="exp_name=bert-${2}-at_${3}-${1}, run_name=run"
+    OVERRIDES="exp_name=bert-${2}-at-${3}-${1}, run_name=run"
     OVERRIDES+=", target_tasks=$1"
     OVERRIDES+=", bert_model_name=bert-$2"
     OVERRIDES+=", bert_embeddings_mode=top"

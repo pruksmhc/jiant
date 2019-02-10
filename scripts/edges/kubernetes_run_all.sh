@@ -141,13 +141,13 @@ do
     kuberun bert-large-uncased-mix-$task   "bert_mix_exp edges-$task large-uncased"
 
     # BERT with per-layer probes.
-    for k in $(seq 0 12); do
-        kuberun bert-base-uncased-at_${k}-$task   "bert_at_k_exp  edges-$task base-uncased ${k}"
-        kuberun bert-base-uncased-mix_${k}-$task  "bert_mix_k_exp edges-$task base-uncased ${k}"
+    for k in $(seq -f "%02.f" 0 12); do
+        kuberun bert-base-uncased-at-${k}-$task   "bert_at_k_exp  edges-$task base-uncased ${k}"
+        kuberun bert-base-uncased-mix-${k}-$task  "bert_mix_k_exp edges-$task base-uncased ${k}"
     done
-    for k in $(seq 0 24); do
-        kuberun bert-large-uncased-at_${k}-$task   "bert_at_k_exp  edges-$task large-uncased ${k}"
-        kuberun bert-large-uncased-mix_${k}-$task  "bert_mix_k_exp edges-$task large-uncased ${k}"
+    for k in $(seq-f "%02.f" 0 24); do
+        kuberun bert-large-uncased-at-${k}-$task   "bert_at_k_exp  edges-$task large-uncased ${k}"
+        kuberun bert-large-uncased-mix-${k}-$task  "bert_mix_k_exp edges-$task large-uncased ${k}"
     done
 done
 

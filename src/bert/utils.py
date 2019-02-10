@@ -24,8 +24,8 @@ class BertEmbedderModule(nn.Module):
                 cache_dir=cache_dir)
         self.embeddings_mode = args.bert_embeddings_mode
         self.num_layers = self.model.config.num_hidden_layers
-        if args.bert_max_layer >= 0:
-            self.max_layer = args.bert_max_layer
+        if int(args.bert_max_layer) >= 0:
+            self.max_layer = int(args.bert_max_layer)
         else:
             self.max_layer = self.num_layers
         assert self.max_layer <= self.num_layers
