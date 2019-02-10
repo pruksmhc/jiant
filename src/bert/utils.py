@@ -94,7 +94,9 @@ class BertEmbedderModule(nn.Module):
         # later on in the SentenceEncoder (see models.py).
         #  h_lex = self.model.embeddings.dropout(embeddings)
 
-        if self.embeddings_mode != "only":
+        if self.embeddings_mode == "only":
+            encoded_layers = []
+        else:
             # encoded_layers is a list of layer activations, each of which is
             # <float32> [batch_size, seq_len, output_dim]
             encoded_layers, _ = self.model(ids, token_type_ids=torch.zeros_like(ids),
