@@ -139,6 +139,16 @@ do
     # BERT with ELMo-style scalar mixing.
     kuberun bert-base-uncased-mix-$task    "bert_mix_exp edges-$task base-uncased"
     kuberun bert-large-uncased-mix-$task   "bert_mix_exp edges-$task large-uncased"
+
+    # BERT with per-layer probes.
+    for k in $(seq 0 12); do
+        kuberun bert-base-uncased-at_${k}-$task   "bert_at_k_exp  edges-$task base-uncased ${k}"
+        kuberun bert-base-uncased-mix_${k}-$task  "bert_mix_k_exp edges-$task base-uncased ${k}"
+    done
+    for k in $(seq 0 24); do
+        kuberun bert-large-uncased-at_${k}-$task   "bert_at_k_exp  edges-$task large-uncased ${k}"
+        kuberun bert-large-uncased-mix_${k}-$task  "bert_mix_k_exp edges-$task large-uncased ${k}"
+    done
 done
 
 # Run cased BERT models for NER tasks
