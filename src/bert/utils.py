@@ -23,6 +23,12 @@ class BertEmbedderModule(nn.Module):
                 args.bert_model_name,
                 cache_dir=cache_dir)
         self.embeddings_mode = args.bert_embeddings_mode
+        self.num_layers = self.model.config.num_hidden_layers
+        if args.bert_max_layer >= 0:
+            self.max_layer = args.bert_max_layer
+        else:
+            self.max_layer = self.num_layers
+        assert self.max_layer <= self.num_layers
 
         # Set trainability of this module.
         for param in self.model.parameters():
@@ -41,8 +47,8 @@ class BertEmbedderModule(nn.Module):
                     ("bert_embeddings_mode='mix' only supports a single set of "
                      "scalars (but if you need this feature, see the TODO in "
                      "the code!)")
-            num_layers = self.model.config.num_hidden_layers
-            self.scalar_mix = scalar_mix.ScalarMix(num_layers + 1,
+            # Always have one more mixing weight, for lexical layer.
+            self.scalar_mix = scalar_mix.ScalarMix(self.max_layer + 1,
                                                    do_layer_norm=False)
 
 
@@ -95,16 +101,18 @@ class BertEmbedderModule(nn.Module):
             encoded_layers, _ = self.model(ids, token_type_ids=torch.zeros_like(ids),
                                            attention_mask=mask,
                                            output_all_encoded_layers=True)
-            h_enc = encoded_layers[-1]
+
+        all_layers = [h_lex] + encoded_layers
+        all_layers = all_layers[:self.max_layer+1]
 
         if self.embeddings_mode in ["none", "top"]:
-            h = h_enc
+            h = all_layers[-1]
         elif self.embeddings_mode == "only":
-            h = h_lex
+            h = all_layers[0]
         elif self.embeddings_mode == "cat":
-            h = torch.cat([h_enc, h_lex], dim=2)
+            h = torch.cat([all_layers[-1], all_layers[0]], dim=2)
         elif self.embeddings_mode == "mix":
-            h = self.scalar_mix([h_lex] + encoded_layers, mask=mask)
+            h = self.scalar_mix(all_layers, mask=mask)
         else:
             raise NotImplementedError(f"embeddings_mode={self.embeddings_mode}"
                                        " not supported.")
