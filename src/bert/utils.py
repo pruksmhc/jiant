@@ -82,20 +82,21 @@ class BertEmbedderModule(nn.Module):
         assert (ids > 1).all()
         ids -= 2
 
-        if self.embeddings_mode not in ["none", "top"]:
-            # This is redundant with the lookup inside BertModel,
-            # but doing so this way avoids the need to modify the BertModel
-            # code.
-            # Extract lexical embeddings; see
-            # https://github.com/huggingface/pytorch-pretrained-BERT/blob/master/pytorch_pretrained_bert/modeling.py#L186
-            h_lex = self.model.embeddings.word_embeddings(ids)
-            h_lex = self.model.embeddings.LayerNorm(h_lex)
-            # following our use of the OpenAI model, don't use dropout for
-            # probing. If you would like to use dropout, consider applying
-            # later on in the SentenceEncoder (see models.py).
-            #  h_lex = self.model.embeddings.dropout(embeddings)
+        # This is redundant with the lookup inside BertModel,
+        # but doing so this way avoids the need to modify the BertModel
+        # code.
+        # Extract lexical embeddings; see
+        # https://github.com/huggingface/pytorch-pretrained-BERT/blob/master/pytorch_pretrained_bert/modeling.py#L186
+        h_lex = self.model.embeddings.word_embeddings(ids)
+        h_lex = self.model.embeddings.LayerNorm(h_lex)
+        # following our use of the OpenAI model, don't use dropout for
+        # probing. If you would like to use dropout, consider applying
+        # later on in the SentenceEncoder (see models.py).
+        #  h_lex = self.model.embeddings.dropout(embeddings)
 
-        if self.embeddings_mode != "only":
+        if self.embeddings_mode == "only":
+            encoded_layers = []
+        else:
             # encoded_layers is a list of layer activations, each of which is
             # <float32> [batch_size, seq_len, output_dim]
             encoded_layers, _ = self.model(ids, token_type_ids=torch.zeros_like(ids),
