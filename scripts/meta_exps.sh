@@ -23,7 +23,11 @@ function meta_experiment() {
 }
 
 function debug() {
-    python main.py --config config/meta.conf --overrides "random_seed = ${seed}, exp_name = metalearn-v2, run_name = debug-update, max_vals = 3, val_interval = 100, do_train = 1, train_for_eval = 0, train_tasks = \"wiki103,mnli\", eval_tasks = \"none\", do_eval = 0, cuda = ${gpuid}, sent_enc = convlm, d_hid = 512, mnli_pair_attn = 0, snli_pair_attn = 0, metatrain = 1, slow_params_approx = 0, one_sided_update = 1, multistep_loss = 1, multistep_scale = 0.5, lr = .000001, sim_lr = .000001, load_model = 0"
+    python main.py --config config/meta.conf --overrides "random_seed = ${seed}, exp_name = metalearn-v2, run_name = debug-update, max_vals = 3, val_interval = 1000, do_train = 1, train_for_eval = 0, train_tasks = \"wiki103,mnli\", eval_tasks = \"none\", do_eval = 0, cuda = ${gpuid}, sent_enc = convlm, d_hid = 512, mnli_pair_attn = 0, snli_pair_attn = 0, metatrain = 1, slow_params_approx = 0, one_sided_update = 1, multistep_loss = 1, multistep_scale = 1.0, lr = .0001, sim_lr = .0001, load_model = 0"
+}
+
+function debug2() {
+    python main.py --config config/meta.conf --overrides "random_seed = ${seed}, exp_name = metalearn-v2, run_name = debug-update-v2, max_vals = 3, val_interval = 1000, do_train = 1, train_for_eval = 0, train_tasks = \"wiki103,mnli\", eval_tasks = \"none\", do_eval = 0, cuda = ${gpuid}, sent_enc = convlm, d_hid = 512, mnli_pair_attn = 0, snli_pair_attn = 0, metatrain = 1, slow_params_approx = 0, one_sided_update = 1, multistep_loss = 1, multistep_scale = 1.0, lr = .0001, sim_lr = .0001, load_model = 0"
 }
 
 # Wiki103 + MNLI + fine-tuning
@@ -50,4 +54,6 @@ elif [ $1 == 'profile-approx-meta' ]; then
     profile_approx_meta
 elif [ $1 == 'debug' ]; then
     debug
+elif [ $1 == 'debug2' ]; then
+    debug2
 fi 
