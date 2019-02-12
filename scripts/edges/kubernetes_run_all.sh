@@ -147,16 +147,6 @@ do
     kuberun bert-base-uncased-mix-$task    "bert_mix_exp edges-$task base-uncased"
     kuberun bert-large-uncased-mix-$task   "bert_mix_exp edges-$task large-uncased"
 
-    # BERT with per-layer probes.
-    for k in $(seq -f "%02.f" 0 12); do
-        kuberun bert-base-uncased-at-${k}-$task   "bert_at_k_exp  edges-$task base-uncased ${k}"
-        kuberun bert-base-uncased-mix-${k}-$task  "bert_mix_k_exp edges-$task base-uncased ${k}"
-    done
-    for k in $(seq-f "%02.f" 0 24); do
-        kuberun bert-large-uncased-at-${k}-$task   "bert_at_k_exp  edges-$task large-uncased ${k}"
-        kuberun bert-large-uncased-mix-${k}-$task  "bert_mix_k_exp edges-$task large-uncased ${k}"
-    done
-
     if [[ $task == "ner-ontonotes" ]]; then
         # Also run cased BERT models for NER tasks
         kuberun bert-base-cased-cat-$task    "bert_cat_exp edges-$task base-cased"
@@ -168,3 +158,48 @@ do
     fi
 done
 
+##
+# Per-layer classifiers on BERT
+declare -a SMALL_TASKS
+declare -a LARGE_TASKS
+SMALL_TASKS+=( "spr1" )
+SMALL_TASKS+=( "spr2" )
+SMALL_TASKS+=( "dpr" )
+SMALL_TASKS+=( "ner-ontonotes" )
+SMALL_TASKS+=( "rel-semeval" )
+LARGE_TASKS+=( "dep-labeling-ewt" )
+LARGE_TASKS+=( "nonterminal-ontonotes" )
+LARGE_TASKS+=( "pos-ontonotes" )
+LARGE_TASKS+=( "srl-conll2012" )
+LARGE_TASKS+=( "coref-ontonotes-conll" )
+LARGE_TASKS+=( "rel-tacred" )
+
+gcloud container clusters get-credentials --zone us-east1-c jsalt
+export GPU_TYPE="p100"
+for task in "${SMALL_TASKS[@]}"
+do
+    # BERT with per-layer probes.
+    for k in $(seq -f "%02.f" 0 12); do
+        kuberun bert-base-uncased-at-${k}-$task   "bert_at_k_exp  edges-$task base-uncased ${k}"
+        kuberun bert-base-uncased-mix-${k}-$task  "bert_mix_k_exp edges-$task base-uncased ${k}"
+    done
+    # for k in $(seq-f "%02.f" 0 24); do
+    #     kuberun bert-large-uncased-at-${k}-$task   "bert_at_k_exp  edges-$task large-uncased ${k}"
+    #     kuberun bert-large-uncased-mix-${k}-$task  "bert_mix_k_exp edges-$task large-uncased ${k}"
+    # done
+done
+
+gcloud container clusters get-credentials --zone us-central1-a jsalt-central
+export GPU_TYPE="v100"
+for task in "${LARGE_TASKS[@]}"
+do
+    # BERT with per-layer probes.
+    for k in $(seq -f "%02.f" 0 12); do
+        kuberun bert-base-uncased-at-${k}-$task   "bert_at_k_exp  edges-$task base-uncased ${k}"
+        kuberun bert-base-uncased-mix-${k}-$task  "bert_mix_k_exp edges-$task base-uncased ${k}"
+    done
+    # for k in $(seq-f "%02.f" 0 24); do
+    #     kuberun bert-large-uncased-at-${k}-$task   "bert_at_k_exp  edges-$task large-uncased ${k}"
+    #     kuberun bert-large-uncased-mix-${k}-$task  "bert_mix_k_exp edges-$task large-uncased ${k}"
+    # done
+done
