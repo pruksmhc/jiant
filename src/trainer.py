@@ -660,8 +660,8 @@ class SamplingMultiTaskTrainer:
                 n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, tasks, 'cola', 'val_data', 'in', batch_size, all_val_metrics, n_examples_overall)
                 n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, tasks, 'cola', 'val_data', 'out', batch_size, all_val_metrics, n_examples_overall)
                 num_eval_tasks += 2
-                metric_infos[task.val_metric+'in'] = {'hist':[], 'stopped':False}
-                metric_infos[task.val_metric+'out'] = {'hist':[], 'stopped': False}
+                metric_infos[task.val_metric+'in'] = {'hist':[], 'stopped':False, 'best': (-1, {})}
+                metric_infos[task.val_metric+'out'] = {'hist':[], 'stopped': False, 'best': (-1, {})}
 
         all_val_metrics['micro_avg'] /= n_examples_overall
         all_val_metrics['macro_avg'] /= num_eval_tasks
