@@ -422,8 +422,6 @@ class SamplingMultiTaskTrainer:
         all_tr_metrics = {}
         log.info("Beginning training. Stopping metric: %s", stop_metric)
         epoch = 1
-        all_val_metrics, should_save, new_best_macro = self._validate(
-            epoch, tasks, batch_size, periodic_save=(phase != "eval"))
         while not should_stop:
             self._model.train()
             task = samples[n_pass % validation_interval]  # randomly select a task
@@ -477,7 +475,7 @@ class SamplingMultiTaskTrainer:
                         float(task_info['loss'] / n_batches_since_val)
                     self._metrics_to_tensorboard_tr(n_pass, task_metrics_to_TB, task.name)
 
-                task_metrics["%s%s_loss" % task.name] = tr_loss / n_batches_since_val
+                task_metrics["%s_loss" % task.name] = tr_loss / n_batches_since_val
                 description = self._description_from_metrics(task_metrics)
                 log.info("Update %d: task %s, batch %d (%d): %s", n_pass,
                          task.name, n_batches_since_val, total_batches_trained, description)
@@ -501,11 +499,11 @@ class SamplingMultiTaskTrainer:
                     if n_batches_since_val > 0:
                         task_metrics = task.get_metrics(reset=True)
                         for name, value in task_metrics.items():
-                            all_tr_metrics["%s_%s" % (task.name, domain, name)] = value
-                        all_tr_metrics["%s%s_loss" % task.name] = \
+                            all_tr_metrics["%s_%s" % (task.name, name)] = value
+                        all_tr_metrics["%s_loss" % task.name] = \
                             float(task_info['loss'] / n_batches_since_val)
                     else:
-                        all_tr_metrics["%s%s_loss" % task.name] = 0.0
+                        all_tr_metrics["%s_loss" % task.name] = 0.0
                     log.info("%s: trained on %d batches, %.3f epochs", task.name,
                              n_batches_since_val, n_batches_since_val / task_info['n_tr_batches'])
                 if self._model.utilization is not None:
@@ -572,7 +570,7 @@ class SamplingMultiTaskTrainer:
             log.info('%s, %d, %s', metric, best_epoch, all_metrics_str)
         return results
 
-    def _validate_helper(self, task, task_infos, task_name, val_data_attr, domain, batch_size, all_val_metrics, n_examples_overall):
+    def _validate_helper(self, task, task_infos, tasks, task_name, val_data_attr, domain, batch_size, all_val_metrics, n_examples_overall):
         n_examples, batch_num = 0, 0
         task_info = task_infos[task.name]
         # to speed up training, we evaluate on a subset of validation data
@@ -645,6 +643,7 @@ class SamplingMultiTaskTrainer:
         ''' Validate on all tasks and return the results and whether to save this epoch or not
             Out of all of the tasks, we average the accuracy
         '''
+
         task_infos, metric_infos = self._task_infos, self._metric_infos
         g_scheduler = self._g_scheduler
         self._model.eval()
@@ -655,11 +654,11 @@ class SamplingMultiTaskTrainer:
         num_eval_tasks = 1
         # Get validation numbers for each task
         for task in tasks:
-            n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, 'cola', 'val_data', '', batch_size, all_val_metrics, n_examples_overall)
+            n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, tasks, 'cola', 'val_data', '', batch_size, all_val_metrics, n_examples_overall)
             num_eval_tasks += 1
             if task.name == "cola":
-                n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, 'colain', 'val_data_in_domain', 'in', batch_size, all_val_metrics, n_examples_overall)
-                #n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, 'colaout', 'val_data_out_domain', 'out',  batch_size, all_val_metrics, n_examples_overall)
+                n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, tasks, 'cola', 'val_data', 'in', batch_size, all_val_metrics, n_examples_overall)
+                n_examples_overall, task_infos, all_val_metrics = self._validate_helper(task, task_infos, tasks, 'cola', 'val_data', 'out', batch_size, all_val_metrics, n_examples_overall)
                 num_eval_tasks += 2
                 metric_infos[task.val_metric+'in'] = {'hist':[], 'stopped':False}
                 metric_infos[task.val_metric+'out'] = {'hist':[], 'stopped': False}
@@ -672,9 +671,9 @@ class SamplingMultiTaskTrainer:
         # Currently we save every validation in the main training runs.
         new_best_macro = False  # whether this epoch is a new best
         for task in tasks + ['micro', 'macro']:
-            import pdb; pdb.set_trace()
             if not isinstance(task, str) and task.name == 'cola':
                 metric_infos, _, _, _, _, _= self._update_metric_history(task, tasks, epoch, 'in', all_val_metrics, metric_infos)
+                metric_infos, _, _, _, _, _= self._update_metric_history(task, tasks, epoch, 'out', all_val_metrics, metric_infos)
             metric_infos, metric_history, metric, this_epoch_metric, metric_decreases, task_name  = self._update_metric_history(task, tasks, epoch, '', all_val_metrics, metric_infos)
             is_best_so_far, out_of_patience = \
                 self._check_history(metric_history, this_epoch_metric, metric_decreases)
@@ -690,7 +689,6 @@ class SamplingMultiTaskTrainer:
                 metric_infos[metric]['stopped'] = True
                 log.info("Out of patience. Stopped tracking %s", task_name)
 
-            import pdb; pdb.set_trace()
             # Get scheduler, using global scheduler if exists and task is macro
             # micro has no scheduler updates
             if task_name not in ['micro', 'macro'] and g_scheduler is None:
