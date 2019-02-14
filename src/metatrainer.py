@@ -72,7 +72,8 @@ def build_trainer(args, task_names, run_dir, metric_should_decrease=True):
                                   slow_params_approx=_get_task_attr('slow_params_approx'),
                                   only_pos_reg=_get_task_attr('only_pos_reg'),
                                   approx_term=_get_task_attr('approx_term'),
-                                  one_sided_update=_get_task_attr('one_sided_update'))
+                                  one_sided_update=_get_task_attr('one_sided_update'),
+                                  n_inner_steps=_get_task_attr('n_inner_steps'))
     return trainer
 
 
@@ -104,6 +105,8 @@ def _simulate_sgd(model, params, task, batch, sim_lr=0.01, n_steps=1):
 
     Args:
         - model (torch.nn.Module): PyTorch model
+        - params (): params for whih to calculate gradient updates
+        - all_params (): all params (for setting new params as model parameters)
         - batch (Dict[str:torch.Tensor]): dictionary of inputs and outputs
         - sim_lr (float): LR for the simulated update
 
@@ -112,15 +115,25 @@ def _simulate_sgd(model, params, task, batch, sim_lr=0.01, n_steps=1):
         - sim_loss (float?): loss of the model with orig params and the given input on the output
     '''
     step2info = {}
+    cur_params = params
     for step_n in range(n_steps):
-        sim_out = model(task, batch)
-        sim_loss = sim_out['loss']
-        grad_orig_params = autograd.grad(sim_loss, params, create_graph=True, allow_unused=True)
-        assert sum([g is not None for g in grad_orig_params]) != 0, "All gradients are None!"
-        cand_params = [p + (-sim_lr * g) if g is not None else p for g, p in zip(grad_orig_params, params)]
-        step2info['out'] = sim_out
-        step2info['grad'] = grad_orig_params
-    return cand_params, sim_out, grad_orig_params
+        step_dict = {}
+
+        cur_all_params = [p for p in self._all_params]
+        for j, i in enumerate(self._shared_params_idxs):
+            cur_all_params[i] = cur_params[j]
+        set_model_params(model, cur_all_params)
+
+        out = model(task, batch)
+        loss = out['loss']
+        grads = autograd.grad(loss, cur_params, create_graph=True, allow_unused=True)
+        #assert sum([g is not None for g in grads]) != 0, "All gradients are None!"
+        cur_params = [p + (-sim_lr * g) if g is not None else p for g, p in zip(grads, cur_params)]
+        step_dict['out'] = out
+        step_dict['grads'] = grads
+        step_dict['params'] = cur_params
+        step2info[step_n] = step_dict
+    return step2info
 
 def set_model_params(model, params):
     ''' Set model's parameters to params.
@@ -138,7 +151,7 @@ class MetaPairTaskTrainer():
                  dec_val_scale=100, training_data_fraction=1.0,
                  sim_lr=0.001, max_sim_grad_norm=5.,
                  slow_params_approx=0, only_pos_reg=0, approx_term=0,
-                 one_sided_update=0):
+                 one_sided_update=0, n_inner_steps=1):
         """
         The training coordinator. Unusually complicated to handle MTL with tasks of
         diverse sizes.
@@ -192,15 +205,17 @@ class MetaPairTaskTrainer():
         self._max_sim_grad_norm = max_sim_grad_norm
         self._lr_decay = lr_decay
         self._min_lr = min_lr
+        self._keep_all_checkpoints = keep_all_checkpoints
+        self._val_data_limit = val_data_limit
+        self._dec_val_scale = dec_val_scale
+        self._training_data_fraction = training_data_fraction
+
         self._sim_lr = sim_lr
         self._slow_params_approx = slow_params_approx
         self._only_pos_reg = only_pos_reg
         self._approx_term = approx_term
         self._one_sided_update = one_sided_update
-        self._keep_all_checkpoints = keep_all_checkpoints
-        self._val_data_limit = val_data_limit
-        self._dec_val_scale = dec_val_scale
-        self._training_data_fraction = training_data_fraction
+        self._n_inner_steps = n_inner_steps
 
         self._task_infos = None
         self._metric_infos = None
@@ -510,14 +525,14 @@ class MetaPairTaskTrainer():
                                                      down_task=trg_task, down_batch=trg_batch)
                     if self._one_sided_update:
                         gradients = [trg_grads]
-                        sim_gradss = [sim_src_grads] if multistep_loss else []
+                        sim_gradss = [[sim_src_grads]] if multistep_loss else []
                         src_out = sim_src_out
                     else:
                         src_grads, sim_trg_grads, src_out, sim_trg_out = \
                                 self._get_meta_gradients(up_task=trg_task, up_batch=trg_batch,
                                                          down_task=src_task, down_batch=src_batch)
                         gradients = [trg_grads, src_grads]
-                        sim_gradss = [sim_trg_grads, sim_src_grads] if multistep_loss else []
+                        sim_gradss = [[sim_trg_grads, sim_src_grads]] if multistep_loss else []
                     self._assign_gradients(gradients, sim_gradss, multistep_scale)
 
                 # elif: # REPTILE
@@ -874,6 +889,11 @@ class MetaPairTaskTrainer():
         # clone the parameters and create the simulated params
         cand_params, up_out, up_grads = \
             simulate_sgd(model, shared_params, up_task, up_batch, sim_lr=self._sim_lr)
+        #step2out = _simulate_sgd(model, shared_params, up_task, up_batch,
+        #                         sim_lr=self._sim_lr, n_steps=self._n_inner_steps)
+        #cand_params = step2out[0]['params']
+        #up_out = step2out[0]['out']
+        #up_grads = step2out[0]['grads']
         all_cand_params = [p for p in self._all_params]
         for j, i in enumerate(shared_params_idxs):
             all_cand_params[i] = cand_params[j]
@@ -914,14 +934,14 @@ class MetaPairTaskTrainer():
             for grad in grads:
                 if grad[i] is not None:
                     self._all_params[j].grad = grad[i] if self._all_params[j].grad is None \
-                                                else self._all_params[j] + grad[i]
+                                                else self._all_params[j].grad + grad[i]
 
             for sim_grads in sim_gradss:
                 for step_n, sim_grad in enumerate(sim_grads):
-                    if sim_grads[i] is not None:
-                        to_assign = sim_grads[i] * pow(multistep_scale, step_n + 1)
+                    if sim_grad[i] is not None:
+                        to_assign = sim_grad[i] * pow(multistep_scale, step_n + 1)
                         self._all_params[j].grad = to_assign if self._all_params[j].grad is None \
-                                                    else self._all_params[j] + to_assign
+                                                    else self._all_params[j].grad + to_assign
         return
 
     def _get_lr(self):

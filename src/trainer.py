@@ -15,6 +15,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.nn.utils.clip_grad import clip_grad_norm_
 from tensorboardX import SummaryWriter  # pylint: disable=import-error
 
+from allennlp.nn.util import move_to_device
 from allennlp.common import Params  # pylint: disable=import-error
 from allennlp.common.checks import ConfigurationError  # pylint: disable=import-error
 from allennlp.data.iterators import BasicIterator, BucketIterator  # pylint: disable=import-error
@@ -244,7 +245,7 @@ class SamplingMultiTaskTrainer():
                                       max_instances_in_memory=10000,
                                       batch_size=batch_size,
                                       biggest_batch_first=True)
-            tr_generator = iterator(task.train_data, num_epochs=None, cuda_device=self._cuda_device)
+            tr_generator = iterator(task.train_data, num_epochs=None)
 
             task_info['iterator'] = iterator
 
@@ -427,6 +428,7 @@ class SamplingMultiTaskTrainer():
             n_batches_since_val = task_info['n_batches_since_val']
             tr_loss = task_info['loss']
             for batch in itertools.islice(tr_generator, n_batches_per_pass):
+                batch = move_to_device(batch, self._cuda_device)
                 n_batches_since_val += 1
                 total_batches_trained += 1
                 optimizer.zero_grad()
@@ -475,8 +477,8 @@ class SamplingMultiTaskTrainer():
                 description = self._description_from_metrics(task_metrics)
                 log.info("Update %d: task %s, batch %d (%d): %s", n_pass,
                          task.name, n_batches_since_val, total_batches_trained, description)
-                grad_norm = np.sum([(pp.grad ** 2).sum().item() for pp in self._model.parameters() if pp.grad is not None])
-                log.info("\t\tgrad norm: %.3f" % grad_norm) # TODO(Alex): wrap this with cmdline arg
+                #grad_norm = np.sum([(pp.grad ** 2).sum().item() for pp in self._model.parameters() if pp.grad is not None])
+                #log.info("\tgrad norm: %.3f" % grad_norm) # TODO(Alex): wrap this with cmdline arg
 
                 task_info['last_log'] = time.time()
 
@@ -589,13 +591,13 @@ class SamplingMultiTaskTrainer():
             else:
                 max_data_points = task.n_val_examples
             val_generator = BasicIterator(batch_size, instances_per_epoch=max_data_points)(
-                task.val_data, num_epochs=1, shuffle=False,
-                cuda_device=self._cuda_device)
+                task.val_data, num_epochs=1, shuffle=False)
             n_val_batches = math.ceil(max_data_points / batch_size)
             all_val_metrics["%s_loss" % task.name] = 0.0
 
             for batch in val_generator:
                 batch_num += 1
+                batch = move_to_device(batch, self._cuda_device)
                 out = self._forward(batch, task=task, for_training=False)
                 loss = out["loss"]
                 all_val_metrics["%s_loss" % task.name] += loss.data.cpu().numpy()
