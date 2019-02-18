@@ -326,15 +326,6 @@ register_task('edges-rel-tacred', rel_path='edges/tacred/rel',
                    'val': "dev.json",
                    'test': "test.json",
                }, is_symmetric=False)(EdgeProbingTask)
-# Entity classification on TACRED. 17 labels.
-# NOTE: these are probably silver labels from CoreNLP,
-# so this is of limited use as a target.
-register_task('edges-ner-tacred', rel_path='edges/tacred/entity',
-               label_file="labels.txt", files_by_split={
-                   'train': "train.json",
-                   'val': "dev.json",
-                   'test': "test.json",
-               }, single_sided=True)(EdgeProbingTask)
 # GAP coreference, trained on GAP development set (4k targets).
 register_task('edges-coref-gap',
                rel_path='edges/gap',
@@ -363,6 +354,15 @@ register_task('edges-noun-verb', rel_path='edges/noun_verb',
 ##
 # Older tasks or versions for backwards compatibility.
 ##
+# Entity classification on TACRED. 17 labels.
+# NOTE: these are probably silver labels from CoreNLP,
+# so this is of limited use as a target.
+register_task('edges-ner-tacred', rel_path='edges/tacred/entity',
+               label_file="labels.txt", files_by_split={
+                   'train': "train.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, single_sided=True)(EdgeProbingTask)
 # SRL CoNLL 2005, formulated as an edge-labeling task.
 register_task('edges-srl-conll2005', rel_path='edges/srl_conll2005',
                label_file="labels.txt", files_by_split={
