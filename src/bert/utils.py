@@ -27,6 +27,7 @@ class BertEmbedderModule(nn.Module):
         else:
             self.max_layer = self.num_layers
         assert self.max_layer <= self.num_layers
+        self.output_pre_residual = args.bert_output_pre_residual
 
         # Set trainability of this module.
         for param in self.model.parameters():
@@ -88,7 +89,8 @@ class BertEmbedderModule(nn.Module):
                                        attention_mask=mask,
                                        output_all_encoded_layers=True,
                                        output_lexical=True,
-                                       max_layer=max_layer)
+                                       max_layer=max_layer,
+                                       output_pre_residual=self.output_pre_residual)
         all_layers = encoded_layers
         assert len(all_layers) == self.max_layer + 1
 

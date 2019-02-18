@@ -18,8 +18,9 @@ class BertOutputForProbing(nn.Module):
     def forward(self, hidden_states, input_tensor):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
+        pre_residual_states = self.LayerNorm(hidden_states)  # PROBING: pre-residual
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
-        return hidden_states
+        return hidden_states, pre_residual_states
 
 
 class BertLayerForProbing(nn.Module):
@@ -32,8 +33,8 @@ class BertLayerForProbing(nn.Module):
     def forward(self, hidden_states, attention_mask):
         attention_output = self.attention(hidden_states, attention_mask)
         intermediate_output = self.intermediate(attention_output)
-        layer_output = self.output(intermediate_output, attention_output)
-        return layer_output
+        layer_output, pre_residual_output = self.output(intermediate_output, attention_output)
+        return layer_output, pre_residual_output
 
 class BertEncoderForProbing(nn.Module):
     def __init__(self, config):
@@ -43,15 +44,17 @@ class BertEncoderForProbing(nn.Module):
 
     def forward(self, hidden_states, attention_mask,
                 output_all_encoded_layers=True,
-                max_layer=None):
+                max_layer=None, output_pre_residual=False):
         all_encoder_layers = []
         max_layer = max_layer or len(self.layer)  # highest layer to run
         for layer_module in self.layer[:max_layer]:
-            hidden_states = layer_module(hidden_states, attention_mask)
+            hidden_states, pre_residual_states = layer_module(hidden_states, attention_mask)
             if output_all_encoded_layers:
-                all_encoder_layers.append(hidden_states)
+                all_encoder_layers.append(pre_residual_states if
+                                          output_pre_residual else hidden_states)
         if not output_all_encoded_layers:
-            all_encoder_layers.append(hidden_states)
+            all_encoder_layers.append(pre_residual_states if
+                                      output_pre_residual else hidden_states)
         return all_encoder_layers
 
 class BertModelForProbing(BertPreTrainedModel):
@@ -101,7 +104,8 @@ class BertModelForProbing(BertPreTrainedModel):
 
     def forward(self, input_ids, token_type_ids=None, attention_mask=None,
                 output_all_encoded_layers=True,
-                max_layer=None, output_lexical=False):
+                max_layer=None, output_lexical=False,
+                output_pre_residual=False):
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
         if token_type_ids is None:
@@ -126,7 +130,8 @@ class BertModelForProbing(BertPreTrainedModel):
         encoded_layers = self.encoder(embedding_output,
                                       extended_attention_mask,
                                       output_all_encoded_layers=output_all_encoded_layers,
-                                      max_layer=max_layer)
+                                      max_layer=max_layer,
+                                      output_pre_residual=output_pre_residual)
         sequence_output = encoded_layers[-1]
         pooled_output = self.pooler(sequence_output)
         if not output_all_encoded_layers:
