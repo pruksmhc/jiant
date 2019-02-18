@@ -177,6 +177,17 @@ function bert_mix_exp() {
     run_exp "config/edgeprobe_bert.conf" "${OVERRIDES}"
 }
 
+function bert_mix_pre_exp() {
+    # Run BERT with ELMo-style scalar mixing across layers.
+    # Usage: bert_mix_exp <task_name>
+    OVERRIDES="exp_name=bert-${2}-mix-pre-${1}, run_name=run"
+    OVERRIDES+=", target_tasks=$1"
+    OVERRIDES+=", bert_model_name=bert-$2"
+    OVERRIDES+=", bert_embeddings_mode=mix"
+    OVERRIDES+=", bert_output_pre_residual=1"
+    run_exp "config/edgeprobe_bert.conf" "${OVERRIDES}"
+}
+
 function bert_mix_k_exp() {
     # Run BERT with ELMo-style scalar mixing across the first K layers.
     # Usage: bert_mix_k_exp <task_name> <bert_model_name> <k>

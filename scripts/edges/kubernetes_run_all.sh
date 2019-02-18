@@ -140,6 +140,9 @@ do
     # BERT with ELMo-style scalar mixing.
     kuberun bert-base-uncased-mix-$task    "bert_mix_exp edges-$task base-uncased"
     kuberun bert-large-uncased-mix-$task   "bert_mix_exp edges-$task large-uncased"
+    # As above, but probe before the residual connection.
+    kuberun bert-base-uncased-mix-pre-$task    "bert_mix_pre_exp edges-$task base-uncased"
+    kuberun bert-large-uncased-mix-pre-$task   "bert_mix_pre_exp edges-$task large-uncased"
 
     # BERT with per-layer probes.
     for k in $(seq -f "%02.f" 0 12); do
