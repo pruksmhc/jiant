@@ -284,7 +284,8 @@ class SamplingMultiTaskTrainer:
               batch_size, n_batches_per_pass,
               weighting_method, scaling_method,
               train_params, optimizer_params, scheduler_params,
-              shared_optimizer=1, load_model=1, phase="main"):
+              shared_optimizer=1, load_model=1, phase="main",
+              embedder_train_mode=True):
         """
         The main training loop.
         Training will stop if we run out of patience or hit the minimum learning rate.
@@ -423,6 +424,9 @@ class SamplingMultiTaskTrainer:
         log.info("Beginning training. Stopping metric: %s", stop_metric)
         while not should_stop:
             self._model.train()
+            if not embedder_train_mode:
+                # Set embedder to eval mode to disable internal dropout layers.
+                self._model.sent_encoder._text_field_embedder.eval()
             task = samples[n_pass % validation_interval]  # randomly select a task
             task_info = task_infos[task.name]
             if task_info['stopped']:

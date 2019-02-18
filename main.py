@@ -216,7 +216,9 @@ def main(cl_arguments):
                                     args.batch_size, args.bpp_base,
                                     args.weighting_method, args.scaling_method,
                                     to_train, opt_params, schd_params,
-                                    args.shared_optimizer, args.load_model, phase="main")
+                                    args.shared_optimizer, args.load_model,
+                                    phase="main",
+                                    embedder_train_mode=args.embedder_train_mode)
 
     # Select model checkpoint from main training run to load
     if not args.do_target_task_training:
@@ -297,7 +299,8 @@ def main(cl_arguments):
                                        args.batch_size, 1,
                                        args.weighting_method, args.scaling_method,
                                        to_train, opt_params, schd_params,
-                                       args.shared_optimizer, load_model=False, phase="eval")
+                                       args.shared_optimizer, load_model=False,
+                                       phase="eval", embedder_train_mode=args.embedder_train_mode)
 
             # Now that we've trained a model, revert to the normal checkpoint logic for this task.
             task_names_to_avoid_loading.remove(task.name)
