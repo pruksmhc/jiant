@@ -9,8 +9,7 @@ from ..preprocess import parse_task_list_arg
 
 from allennlp.modules import scalar_mix
 
-# huggingface implementation of BERT
-import pytorch_pretrained_bert
+from .custom_bert_model import BertModelForProbing
 
 class BertEmbedderModule(nn.Module):
     """ Wrapper for BERT module to fit into jiant APIs. """
@@ -18,8 +17,7 @@ class BertEmbedderModule(nn.Module):
     def __init__(self, args, cache_dir=None):
         super(BertEmbedderModule, self).__init__()
 
-        self.model = \
-            pytorch_pretrained_bert.BertModel.from_pretrained(
+        self.model = BertModelForProbing.from_pretrained(
                 args.bert_model_name,
                 cache_dir=cache_dir)
         self.embeddings_mode = args.bert_embeddings_mode
@@ -82,29 +80,17 @@ class BertEmbedderModule(nn.Module):
         assert (ids > 1).all()
         ids -= 2
 
-        # This is redundant with the lookup inside BertModel,
-        # but doing so this way avoids the need to modify the BertModel
-        # code.
-        # Extract lexical embeddings; see
-        # https://github.com/huggingface/pytorch-pretrained-BERT/blob/master/pytorch_pretrained_bert/modeling.py#L186
-        h_lex = self.model.embeddings.word_embeddings(ids)
-        h_lex = self.model.embeddings.LayerNorm(h_lex)
-        # following our use of the OpenAI model, don't use dropout for
-        # probing. If you would like to use dropout, consider applying
-        # later on in the SentenceEncoder (see models.py).
-        #  h_lex = self.model.embeddings.dropout(embeddings)
-
-        if self.embeddings_mode == "only":
-            encoded_layers = []
-        else:
-            # encoded_layers is a list of layer activations, each of which is
-            # <float32> [batch_size, seq_len, output_dim]
-            encoded_layers, _ = self.model(ids, token_type_ids=torch.zeros_like(ids),
-                                           attention_mask=mask,
-                                           output_all_encoded_layers=True)
-
-        all_layers = [h_lex] + encoded_layers
-        all_layers = all_layers[:self.max_layer+1]
+        # short-cut for lexical mode: only run embeddings layer.
+        max_layer = self.max_layer if self.embeddings_mode != "only" else 0
+        # encoded_layers is a list of layer activations, each of which is
+        # <float32> [batch_size, seq_len, output_dim]
+        encoded_layers, _ = self.model(ids, token_type_ids=torch.zeros_like(ids),
+                                       attention_mask=mask,
+                                       output_all_encoded_layers=True,
+                                       output_lexical=True,
+                                       max_layer=max_layer)
+        all_layers = encoded_layers
+        assert len(all_layers) == self.max_layer + 1
 
         if self.embeddings_mode in ["none", "top"]:
             h = all_layers[-1]

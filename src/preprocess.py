@@ -240,7 +240,7 @@ def build_tasks(args):
     tokenizer_names = {task.name:task.tokenizer_name for task in tasks}
     assert len(set(tokenizer_names.values())) == 1, \
             (f"Error: mixing tasks with different tokenizers!"
-              " Tokenizations: {tokenizer_names:s}")
+             f" Tokenizations: {tokenizer_names}")
 
     # 2) build / load vocab and indexers
     indexers = {}
