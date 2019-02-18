@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 
-# Script to convert Noun-Verb ambiguity data 
-# (Elkahky et al. 2018, https://aclweb.org/anthology/D18-1277) 
+# Script to convert Noun-Verb ambiguity data
+# (Elkahky et al. 2018, https://aclweb.org/anthology/D18-1277)
 # to edge probing format.
-# 
-# Download the data from 
+#
+# Download the data from
 # https://github.com/google-research-datasets/noun-verb
 #
 # Usage:
@@ -14,7 +14,7 @@
 #
 # Note that the paper uses the fine-grained tags (in train.conll) for training,
 # then evaluates by mapping the tags onto VERB/NON-VERB categories. The output
-# of this script uses only VERB/NON-VERB as the target labels, but includes 
+# of this script uses only VERB/NON-VERB as the target labels, but includes
 # the fine-grained tags in targets.info when available.
 
 import sys
@@ -37,7 +37,7 @@ from typing import Dict, Tuple, List
 
 def conll_to_record(sentence: List[Dict]) -> Dict:
     tokens = [item['form'] for item in sentence]
-    
+
     record = {}
     record['text'] = " ".join(tokens)
     record['targets'] = []
@@ -51,7 +51,7 @@ def conll_to_record(sentence: List[Dict]) -> Dict:
         target['info'] = {'upostag': item['upostag'],
                           'xpostag': item['xpostag']}
         record['targets'].append(target)
-        
+
     return record
 
 def convert_file(fname: str, target_fname: str):
