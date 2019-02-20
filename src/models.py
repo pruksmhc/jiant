@@ -23,25 +23,28 @@ from allennlp.modules.seq2seq_encoders import StackedSelfAttentionEncoder
 from allennlp.training.metrics import Average
 
 from .allennlp_mods.elmo_text_field_embedder import ElmoTextFieldEmbedder, ElmoTokenEmbedderWrapper
-from .utils import get_batch_utilization, get_elmo_mixing_weights
-from . import config
-from . import edge_probing
+from .utils.utils import assert_for_log, get_batch_utilization, \
+    get_batch_size, get_elmo_mixing_weights, maybe_make_dir
+from .utils import config
 
-from .tasks import CCGTaggingTask, ClassificationTask, CoLATask, EdgeProbingTask, GroundedSWTask, \
-    GroundedTask, LanguageModelingTask, MTTask, MultiNLIDiagnosticTask, PairClassificationTask, \
-    PairOrdinalRegressionTask, PairRegressionTask, RankingTask, RedditSeq2SeqTask, \
+from .preprocess import parse_task_list_arg, get_tasks
+
+from .tasks.tasks import CCGTaggingTask, ClassificationTask, CoLATask, GroundedSWTask, \
+    GroundedTask, MultiNLIDiagnosticTask, PairClassificationTask, \
+    PairOrdinalRegressionTask, PairRegressionTask, RankingTask, \
     RegressionTask, SequenceGenerationTask, SingleClassificationTask, SSTTask, STSBTask, \
-    TaggingTask, WeakGroundedTask, Wiki103Seq2SeqTask, JOCITask
+    TaggingTask, WeakGroundedTask, JOCITask
+from .tasks.lm import LanguageModelingTask
+from .tasks.mt import MTTask, RedditSeq2SeqTask, Wiki103Seq2SeqTask
+from .tasks.edge_probing import EdgeProbingTask
 
-from .modules import SentenceEncoder, BoWSentEncoder, \
+from .modules.modules import SentenceEncoder, BoWSentEncoder, \
     AttnPairEncoder, MaskedStackedSelfAttentionEncoder, \
     BiLMEncoder, ElmoCharacterEncoder, Classifier, Pooler, \
     SingleClassifier, PairClassifier, CNNEncoder, \
     NullPhraseLayer
-
-from .utils import assert_for_log, get_batch_utilization, get_batch_size
-from .preprocess import parse_task_list_arg, get_tasks
-from .seq2seq_decoder import Seq2SeqDecoder
+from .modules.edge_probing import EdgeClassifierModule
+from .modules.seq2seq_decoder import Seq2SeqDecoder
 
 
 # Elmo stuff
@@ -58,7 +61,32 @@ def build_model(args, vocab, pretrained_embs, tasks):
     '''Build model according to args '''
 
     # Build embeddings.
-    d_emb, embedder, cove_layer = build_embeddings(args, vocab, tasks, pretrained_embs)
+    if args.openai_transformer:
+        # Note: incompatible with other embedders, but logic in preprocess.py
+        # should prevent these from being enabled anyway.
+        from .openai_transformer_lm.utils import OpenAIEmbedderModule
+        log.info("Using OpenAI transformer model; skipping other embedders.")
+        cove_layer = None
+        embedder = OpenAIEmbedderModule(args)
+        d_emb = embedder.get_output_dim()
+    elif args.bert_model_name:
+        # Note: incompatible with other embedders, but logic in preprocess.py
+        # should prevent these from being enabled anyway.
+        from .bert.utils import BertEmbedderModule
+        log.info(f"Using BERT model ({args.bert_model_name}); skipping other embedders.")
+        cove_layer = None
+        # Set PYTORCH_PRETRAINED_BERT_CACHE environment variable to an existing
+        # cache; see
+        # https://github.com/huggingface/pytorch-pretrained-BERT/blob/master/pytorch_pretrained_bert/file_utils.py
+        bert_cache_dir = os.getenv("PYTORCH_PRETRAINED_BERT_CACHE",
+                                   os.path.join(args.exp_dir, "bert_cache"))
+        maybe_make_dir(bert_cache_dir)
+        embedder = BertEmbedderModule(args, cache_dir=bert_cache_dir)
+        d_emb = embedder.get_output_dim()
+    else:
+        # Default case, used for ELMo, CoVe, word embeddings, etc.
+        d_emb, embedder, cove_layer = build_embeddings(args, vocab,
+                                                       tasks, pretrained_embs)
     d_sent = args.d_hid
 
     # Build single sentence encoder: the main component of interest
@@ -181,7 +209,7 @@ def build_model(args, vocab, pretrained_embs, tasks):
 def get_task_whitelist(args):
     """Filters tasks so that we only build models that we will use, meaning we only
     build models for train tasks and for classifiers of eval tasks"""
-    eval_task_names = parse_task_list_arg(args.eval_tasks)
+    eval_task_names = parse_task_list_arg(args.target_tasks)
     eval_clf_names = []
     for task_name in eval_task_names:
         override_clf = config.get_task_attr(args, task_name, 'use_classifier')
@@ -189,7 +217,7 @@ def get_task_whitelist(args):
             eval_clf_names.append(task_name)
         else:
             eval_clf_names.append(override_clf)
-    train_task_names = parse_task_list_arg(args.train_tasks)
+    train_task_names = parse_task_list_arg(args.pretrain_tasks)
     log.info("Whitelisting train tasks=%s, eval_clf_tasks=%s",
              str(train_task_names), str(eval_clf_names))
     return train_task_names, eval_clf_names
@@ -230,7 +258,7 @@ def build_embeddings(args, vocab, tasks, pretrained_embs=None):
         assert args.word_embs == "glove", "CoVe requires GloVe embeddings."
         assert d_word == 300, "CoVe expects 300-dimensional GloVe embeddings."
         try:
-            from .cove.cove import MTLSTM as cove_lstm
+            from .modules.cove.cove import MTLSTM as cove_lstm
             # Have CoVe do an internal GloVe lookup, but don't add residual.
             # We'll do this manually in modules.py; see
             # SentenceEncoder.forward().
@@ -274,7 +302,7 @@ def build_embeddings(args, vocab, tasks, pretrained_embs=None):
             # No file exists, so assuming we are just starting to pretrain. If pretrain is to be
             # skipped, then there's a way to bypass this assertion by explicitly allowing for a missing
             # classiifer task map.
-            assert_for_log(args.do_train or args.allow_missing_task_map,
+            assert_for_log(args.do_pretrain or args.allow_missing_task_map,
                            "Error: {} should already exist.".format(classifier_save_path))
             if args.allow_missing_task_map:
                 log.warning("Warning: classifier task map not found in model"
@@ -354,7 +382,7 @@ def build_module(task, model, d_sent, d_emb, vocab, embedder, args):
         hid2tag = build_tagger(task, d_sent, task.num_tags)
         setattr(model, '%s_mdl' % task.name, hid2tag)
     elif isinstance(task, EdgeProbingTask):
-        module = edge_probing.EdgeClassifierModule(task, d_sent, task_params)
+        module = EdgeClassifierModule(task, d_sent, task_params)
         setattr(model, '%s_mdl' % task.name, module)
     elif isinstance(task, (RedditSeq2SeqTask, Wiki103Seq2SeqTask)):
         log.info("using {} attention".format(args.s2s['attention']))

@@ -20,10 +20,11 @@ from allennlp.common.checks import ConfigurationError  # pylint: disable=import-
 from allennlp.data.iterators import BasicIterator, BucketIterator  # pylint: disable=import-error
 from allennlp.training.learning_rate_schedulers import LearningRateScheduler  # pylint: disable=import-error
 from allennlp.training.optimizers import Optimizer  # pylint: disable=import-error
+from allennlp.nn.util import move_to_device, device_mapping
 
-from .utils import device_mapping, assert_for_log  # pylint: disable=import-error
+from .utils.utils import assert_for_log  # pylint: disable=import-error
 from .evaluate import evaluate
-from . import config
+from .utils import config
 
 
 def build_trainer_params(args, task_names):
@@ -34,7 +35,7 @@ def build_trainer_params(args, task_names):
                                                                attr_name)
     params = {}
     train_opts = ['optimizer', 'lr', 'batch_size', 'lr_decay_factor',
-                  'task_patience', 'patience', 'scheduler_threshold']
+                  'lr_patience', 'patience', 'scheduler_threshold']
     # we want to pass to the build_train()
     extra_opts = ['sent_enc', 'd_hid', 'warmup',
                   'max_grad_norm', 'min_lr', 'batch_size',
@@ -85,7 +86,7 @@ def build_trainer(params, model, run_dir, metric_should_decrease=True):
         schd_params = Params({'type': 'reduce_on_plateau',
                               'mode': 'min' if metric_should_decrease else 'max',
                               'factor': params['lr_decay_factor'],
-                              'patience': params['task_patience'],
+                              'patience': params['lr_patience'],
                               'threshold': params['scheduler_threshold'],
                               'threshold_mode': 'abs',
                               'verbose': True})
@@ -164,7 +165,6 @@ class SamplingMultiTaskTrainer:
         self._val_data_limit = val_data_limit
         self._dec_val_scale = dec_val_scale
         self._training_data_fraction = training_data_fraction
-
         self._task_infos = None
         self._metric_infos = None
 
@@ -249,8 +249,8 @@ class SamplingMultiTaskTrainer:
                                       max_instances_in_memory=10000,
                                       batch_size=batch_size,
                                       biggest_batch_first=True)
-            tr_generator = iterator(task.train_data, num_epochs=None, cuda_device=self._cuda_device)
-
+            tr_generator = iterator(task.train_data, num_epochs=None)
+            tr_generator = move_to_device(tr_generator, self._cuda_device)
             task_info['iterator'] = iterator
 
             if phase == "main":
@@ -590,8 +590,8 @@ class SamplingMultiTaskTrainer:
             else:
                 max_data_points = task.n_val_examples
             val_generator = BasicIterator(batch_size, instances_per_epoch=max_data_points)(
-                task.val_data, num_epochs=1, shuffle=False,
-                cuda_device=self._cuda_device)
+                task.val_data, num_epochs=1, shuffle=False)
+            val_generator = move_to_device(val_generator, self._cuda_device)
             n_val_batches = math.ceil(max_data_points / batch_size)
             all_val_metrics["%s_loss" % task.name] = 0.0
 
@@ -732,7 +732,7 @@ class SamplingMultiTaskTrainer:
 
     def _forward(self, batch, for_training, task=None):
         ''' At one point this does something, now it doesn't really do anything '''
-        tensor_batch = batch
+        tensor_batch = move_to_device(batch, self._cuda_device)
         model_out = self._model.forward(task, tensor_batch)
         return model_out
 
