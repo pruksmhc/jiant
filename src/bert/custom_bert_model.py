@@ -46,7 +46,8 @@ class BertEncoderForProbing(nn.Module):
                 output_all_encoded_layers=True,
                 max_layer=None, output_pre_residual=False):
         all_encoder_layers = []
-        max_layer = max_layer or len(self.layer)  # highest layer to run
+        if max_layer is None:
+            max_layer = len(self.layer)  # highest layer to run
         for layer_module in self.layer[:max_layer]:
             hidden_states, pre_residual_states = layer_module(hidden_states, attention_mask)
             if output_all_encoded_layers:
@@ -132,8 +133,11 @@ class BertModelForProbing(BertPreTrainedModel):
                                       output_all_encoded_layers=output_all_encoded_layers,
                                       max_layer=max_layer,
                                       output_pre_residual=output_pre_residual)
-        sequence_output = encoded_layers[-1]
-        pooled_output = self.pooler(sequence_output)
+        if max_layer != 0:
+            sequence_output = encoded_layers[-1]
+            pooled_output = self.pooler(sequence_output)
+        else:
+            pooled_output = None
         if not output_all_encoded_layers:
             encoded_layers = encoded_layers[-1]
         if output_all_encoded_layers and output_lexical:
