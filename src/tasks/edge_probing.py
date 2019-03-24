@@ -115,14 +115,15 @@ class EdgeProbingTask(Task):
     def _stream_records(self, filename):
         skip_ctr = 0
         total_ctr = 0
-        for record in utils.load_json_data(filename):
-            total_ctr += 1
-            # Skip records with empty targets.
-            # TODO(ian): don't do this if generating negatives!
-            if not record.get('targets', None):
-                skip_ctr += 1
-                continue
-            yield record
+        for records in utils.load_json_data(filename):
+            for record in records:
+                total_ctr += 1
+                # Skip records with empty targets.
+                # TODO(ian): don't do this if generating negatives!
+                if not record.get('targets', None):
+                    skip_ctr += 1
+                    continue
+                yield record
         log.info("Read=%d, Skip=%d, Total=%d from %s",
                  total_ctr - skip_ctr, skip_ctr, total_ctr,
                  filename)
@@ -174,7 +175,7 @@ class EdgeProbingTask(Task):
         '''
         return len(split_text)
 
-    def _make_span_field(self, s, text_field, offset=1):
+    def _make_span_field(self, s, text_field, offset=0):
         return SpanField(s[0] + offset, s[1] - 1 + offset, text_field)
 
     def _pad_tokens(self, tokens):
@@ -196,7 +197,6 @@ class EdgeProbingTask(Task):
         d["idx"] = MetadataField(idx)
 
         d['input1'] = text_field
-
         d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
                                  for t in record['targets']])
         if not self.single_sided:
@@ -205,10 +205,7 @@ class EdgeProbingTask(Task):
         # Always use multilabel targets, so be sure each label is a list.
         labels = [utils.wrap_singleton_string(t['label'])
                   for t in record['targets']]
-        d['labels'] = ListField([MultiLabelField(label_set,
-                                                 label_namespace=self._label_namespace,
-                                                 skip_indexing=False)
-                                 for label_set in labels])
+        d['labels'] = ListField([MultiLabelField(label_set, label_namespace=self._label_namespace, skip_indexing=False) for label_set in labels])
         return Instance(d)
 
     def process_split(self, records, indexers) -> Iterable[Type[Instance]]:
@@ -242,106 +239,12 @@ class EdgeProbingTask(Task):
     def update_subset_metrics(logits, labels, tagmask=None):
       return
 
-@register_task('gap-coreference', rel_path = 'processed/gap-coreference')
-class GapCoreferenceTask(EdgeProbingTask):
+@register_task('winograd-coreference', rel_path = 'winograd-coref')
+class WinogradCoreferenceTask(EdgeProbingTask):
     def __init__(self, path, single_sided=False, **kw):
-        self._files_by_split = {'train': "__development__", 'val': "__validation__",'test': "__test__"}
+        self._files_by_split = {'train': "train", 'val': "val",'test': "test"}
         super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=single_sided, **kw)
 
-    def make_instance(self, record, idx, indexers) -> Type[Instance]:
-        """Convert a single record to an AllenNLP Instance."""
-        tokens = record['text'].split()  # already space-tokenized by Moses
-        tokens = self._pad_tokens(tokens)
-        text_field = sentence_to_text_field(tokens, indexers)
-
-        d = {}
-        d["idx"] = MetadataField(idx)
-
-        d['input1'] = text_field
-
-        d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
-                                 for t in record['targets']])
-        # single-sided. And we reused the cod ehre
-        if not self.single_sided:
-            d['span2s'] = ListField([self._make_span_field(t['span2'], text_field, 1)
-                                     for t in record['targets']])
-        # Always use multilabel targets, so be sure each label is a list.
-        labels = [[t['label']] for t in record['targets']]
-
-        d['labels'] = ListField([MultiLabelField(label_set, label_namespace=self._label_namespace, skip_indexing=False) for label_set in labels])
-        return Instance(d)
-
-    def process_split(self, split, indexers):
-        ''' Process split text into a list of AllenNLP Instances with tag masking'''
-        def _map_fn(r, idx): 
-          instance = self.make_instance(r, idx, indexers)
-          tag_field = MultiLabelField(r["gender"], label_namespace="tagids",skip_indexing=True, num_labels=len(self.tag_list))
-          instance.add_field("tagmask", field=tag_field)
-          return instance
-        instances = map(_map_fn, split, itertools.count())
-        return instances
-
-    def load_data(self):
-        tag_vocab = vocabulary.Vocabulary(counter=None)
-
-        iters_by_split = collections.OrderedDict()
-        import pandas as pd
-
-        def find(target, myList):
-            for i in range(len(myList)):
-                if myList[i] == target:
-                    yield i
-
-        for split in self._files_by_split.keys():
-            """
-               Only Loading all sentences of up to length max_seq_len.
-            """
-            data = pd.read_csv(self._files_by_split[split], delimiter="\t")
-            text = data["text"]
-            lengths = [len(sent.split(" ")) for sent in text.tolist()]
-            to_include = [1 if length < self.max_seq_len - 1  else 0 for length in lengths]
-            indices = [i for i,x in enumerate(to_include) if x == 1]
-            data = data.loc[indices]
-            text = data["text"].tolist()
-            s1start = data["prompt_start_index"].tolist()
-            s1end = data["prompt_end_index"].tolist()
-            s2start = data["candidate_start_index"].tolist()
-            s2end = data["candidate_end_index"].tolist()
-            labels_map = {True: "true", False: "false"}
-            labels = data["label"]
-            labels = labels.apply(lambda x: labels_map[x]).tolist()
-            tagids = data["gender"].tolist()
-            for tag in set(tagids):
-              tag_vocab.add_token_to_namespace(tag)
-            # we minus 2 here for tag_vocab so that we ignore @@unknown@@ etc
-            structured_data = [{"info": {"document_id": "XX","sentence_id":i}, "text": text[i], "gender": [tag_vocab.get_token_index(tagids[i]) - 2], "targets":[{"span1":[int(s1start[i]), int(s1end[i])], "label": labels[i], "span2":[int(s2start[i]), int(s2end[i])]}]} for i in range(len(text))]
-            iters_by_split[split] = structured_data
-        self.tag_list = utils.get_tag_list(tag_vocab)
-        subset_mcc_scorers = create_subset_scorers(count=len(self.tag_list), scorer_type=FastMatthews)
-        subset_acc_scorers = create_subset_scorers(count=len(self.tag_list), scorer_type=BooleanAccuracy)
-        subset_f1_scorers = create_subset_scorers(count=len(self.tag_list), scorer_type=F1Measure, positive_label=1)  # binary F1 overall
-        self.subset_scorers = {"mcc": subset_mcc_scorers, "acc": subset_acc_scorers, "f1": subset_f1_scorers}
-        return iters_by_split
-
-    def update_subset_metrics(self, logits, labels, tagmask=None):
-        logits, labels = logits.detach(), labels.detach()
-        _, preds = logits.max(dim=1)
-        if tagmask is not None:
-            binary_preds = logits.ge(0).long()  # {0,1}
-            update_subset_scorers(self.subset_scorers["mcc"], binary_preds, labels.long(), tagmask)
-            update_subset_scorers(self.subset_scorers["acc"], binary_preds, labels.long(), tagmask)
-            # F1Measure() expects [total_num_targets, n_classes, 2]
-            # to compute binarized F1.
-            binary_scores = torch.stack([-1 * logits, logits], dim=2)
-            update_subset_scorers(self.subset_scorers["f1"], binary_scores, labels, tagmask)
-
-    def get_metrics(self, reset=False):
-        '''Get metrics specific to the task'''
-        collected_metrics = {'mcc': self.mcc_scorer.get_metric(reset), 'accuracy': self.acc_scorer.get_metric(reset), "f1": self.f1_scorer.get_metric(reset)[2]}
-        for score_name, scorer in list(self.subset_scorers.items()):
-          collected_metrics.update(collect_subset_scores(scorer, score_name, self.tag_list, reset))
-        collected_metrics.update({"bias": collected_metrics["f1_Male"] / collected_metrics["f1_Female"]})
-        return collected_metrics
 
 ##
 # Task definitions. We call the register_task decorator explicitly so that we
