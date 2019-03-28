@@ -24,11 +24,9 @@ source activate jiant_new
 eval_cmd="do_train = 0, train_for_eval = 0, do_eval = 1, batch_size = 128, write_preds = test, write_strict_glue_format = 1"
 
 ## Winograd training ##
-python main.py --config_file config/benchmarkssuperglue/superglue.conf  --overrides "pretrain_tasks =winograd-coreference, do_pretrain = 1, do_target_task_training = 0, run_name = small_bert_cased_rnn_enclr0.001, project_dir=winograd, bert_embeddings_mode = top, lr = 0.001,sent_enc = \"rnn\""
-python main.py --config_file config/benchmarkssuperglue/superglue.conf --overrides "pretrain_tasks =winograd-coreference, project_dir=winograd, target_tasks=winogradp-coreference, exp_name = test-result, run_name = small_bert_cased_rnn_enc, bert_embeddings_mode = only, lr = 0.001, ${eval_cmd}"
-lr="0.001"
-python main.py --config_file config/benchmarkssuperglue/superglue.conf  --overrides "pretrain_tasks =winograd-coreference, do_pretrain = 1, do_target_task_training = 0, run_name = small_bert_cased_rnn_enclr${lr}, project_dir=winograd, bert_embeddings_mode = top, lr = ${lr},sent_enc = \"rnn\""
-python main.py --config_file config/benchmarkssuperglue/superglue.conf --overrides "pretrain_tasks =winograd-coreference, projecct_dir=winograd, target_tasks=winogradp-coreference, exp_name = test-result, run_name = small_bert_cased_rnn_enclr${lr}, bert_embeddings_mode = only, lr = ${lr}, ${eval_cmd}"
+python main.py --config_file config/benchmarkssuperglue/superglue.conf  --overrides "pretrain_tasks =winograd-coreference, do_pretrain = 1, do_target_task_training = 0, run_name = small_bert_cased_rnn_enclr0.0001, project_dir=winograd, bert_embeddings_mode = top, lr = 0.0001,sent_enc = \"rnn\""
+python main.py --config_file config/benchmarkssuperglue/superglue.conf --overrides "pretrain_tasks =winograd-coreference, project_dir=winograd, target_tasks=winogradp-coreference, exp_name = test-result, run_name = small_bert_cased_rnn_enclr0.0001, bert_embeddings_mode = top, lr = 0.0001, ${eval_cmd}"
+
 lr="0.01"
 python main.py --config_file config/benchmarkssuperglue/superglue.conf  --overrides "pretrain_tasks =winograd-coreference, do_pretrain = 1, do_target_task_training = 0, run_name = small_bert_cased_rnn_enclr${lr}, project_dir=winograd, bert_embeddings_mode = top, lr = ${lr},sent_enc = \"rnn\""
-python main.py --config_file config/benchmarkssuperglue/superglue.conf --overrides "pretrain_tasks =winograd-coreference, project_dir=winograd, target_tasks=winogradp-coreference, exp_name = test-result, run_name = small_bert_cased_rnn_enclr${lr}, bert_embeddings_mode = only, lr = ${lr}, ${eval_cmd}"
+python main.py --config_file config/benchmarkssuperglue/superglue.conf --overrides "pretrain_tasks =winograd-coreference, project_dir=winograd, target_tasks=winogradp-coreference, exp_name = test-result, run_name = small_bert_cased_rnn_enclr${lr}, bert_embeddings_mode = top, lr = ${lr}, ${eval_cmd}"
