@@ -59,6 +59,7 @@ class EdgeProbingDatasetStats(object):
         stats['targets.max_count'] = max(len(targets), stats['targets.max_count'])
         for target in targets:
             labels = wrap_singleton_string(target['label'])
+            import pdb; pdb.set_trace()
             stats['targets.label.count'] += len(labels)
             span1 = target.get('span1', [-1, -1])
             stats['targets.span1.length'] += (max(span1) - min(span1))
@@ -100,9 +101,6 @@ class EdgeProbingDatasetStats(object):
 
 def write_file_and_print_stats(records: Iterable[Dict], target_fname: str):
     """ Write edge probing records to a JSON file, and print dataset stats. """
-    stats = EdgeProbingDatasetStats()
-    records = stats.passthrough(records)
     write_json_data(target_fname, records)
     log.info("Wrote examples to %s", target_fname)
-    log.info(stats.format())
-    return stats
+

@@ -436,6 +436,9 @@ def build_task_specific_modules(
         hid2tag = build_tagger(task, d_sent, task.num_tags)
         setattr(model, '%s_mdl' % task.name, hid2tag)
     elif isinstance(task, EdgeProbingTask):
+        # span,and also the type tag  
+        if task.name == 'ultrafine':
+            d_sent *= 2 
         module = EdgeClassifierModule(task, d_sent, task_params)
         setattr(model, '%s_mdl' % task.name, module)
     elif isinstance(task, (RedditSeq2SeqTask, Wiki103Seq2SeqTask)):
@@ -644,6 +647,12 @@ class MultiTaskModel(nn.Module):
                 self.utilization(get_batch_utilization(batch['input']))
         if isinstance(task, SingleClassificationTask):
             out = self._single_sentence_forward(batch, task, predict)
+        elif task.name == 'ultrafine':
+            sent_embs, sent_mask = self.sent_encoder(batch['input1'], task)
+            type_embs, _ = self.sent_encoder(batch['span2s'], task)
+            module = getattr(self, "%s_mdl" % task.name)
+            out = module.forward(batch, sent_embs, sent_mask,
+                                 task, predict, type_embs=type_embs)
         elif isinstance(task, MultiNLIDiagnosticTask):
             out = self._pair_sentence_MNLI_diagnostic_forward(
                 batch, task, predict)

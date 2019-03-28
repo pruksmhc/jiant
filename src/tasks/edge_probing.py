@@ -10,7 +10,7 @@ import numpy as np
 from allennlp.training.metrics import CategoricalAccuracy, \
     BooleanAccuracy, F1Measure
 from ..allennlp_mods.correlation import FastMatthews
-
+from sklearn.metrics import f1_score
 from allennlp.data.tokenizers import Token
 # Fields for instance processing
 from allennlp.data import Instance, Token
@@ -33,10 +33,24 @@ from typing import Iterable, Sequence, List, Dict, Any, Type
 from .tasks import Task, sentence_to_text_field, create_subset_scorers, collect_subset_scores, update_subset_scorers
 from .registry import register_task, REGISTRY  # global task registry
 
+class MacroF1():
+  def __init__(self):
+    self.f1_pos_class = F1Measure(positive_label=1)
+    self.f1_neg_class = F1Measure(positive_label=0)
+
+  def __call__(self, logits, labels, reset):
+    self.f1_pos_class(logits, labels)
+    self.f1_neg_class(logits, labels)
+
+  def get_metric(self, reset=False):
+    macro_f1 = (self.f1_pos_class.get_metric(reset)[2] + self.f1_neg_class.get_metric(reset)[2]) / 2.0
+    return macro_f1
+
+# you should just get the F1 scores so fa
+# THe macro average is() (0.1 + 0.5 / 2) +(0.3 + 0.7/ 2))/2 = 0.1 + 0.5 + 0.3 + 0.7 / 4
+# and (0.2+0.8)
 ##
 # Class definitions for edge probing. See below for actual task registration.
-
-
 class EdgeProbingTask(Task):
     ''' Generic class for fine-grained edge probing.
 
@@ -124,6 +138,7 @@ class EdgeProbingTask(Task):
             if not record.get('targets', None):
                 skip_ctr += 1
                 continue
+            record["text"] = " ".join(record["text"].split()[:510])
             yield record
         log.info("Read=%d, Skip=%d, Total=%d from %s",
                  total_ctr - skip_ctr, skip_ctr, total_ctr,
@@ -176,7 +191,7 @@ class EdgeProbingTask(Task):
         '''
         return len(split_text)
 
-    def _make_span_field(self, s, text_field, offset=1):
+    def _make_span_field(self, s, text_field, offset=0):
         return SpanField(s[0] + offset, s[1] - 1 + offset, text_field)
 
     def _pad_tokens(self, tokens):
@@ -198,19 +213,17 @@ class EdgeProbingTask(Task):
         d["idx"] = MetadataField(idx)
 
         d['input1'] = text_field
-
         d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
                                  for t in record['targets']])
         if not self.single_sided:
             d['span2s'] = ListField([self._make_span_field(t['span2'], text_field, 1)
                                      for t in record['targets']])
+
+        d['span2s'] = sentence_to_text_field(record['targets'][0]["span2"].split(), indexers)
         # Always use multilabel targets, so be sure each label is a list.
-        labels = [utils.wrap_singleton_string(t['label'])
+        labels = [utils.wrap_singleton_string(str(t['label']).lower())
                   for t in record['targets']]
-        d['labels'] = ListField([MultiLabelField(label_set,
-                                                 label_namespace=self._label_namespace,
-                                                 skip_indexing=False)
-                                 for label_set in labels])
+        d['labels'] = ListField([MultiLabelField(label_set, label_namespace=self._label_namespace, skip_indexing=False) for label_set in labels])
         return Instance(d)
 
     def process_split(self, records, indexers) -> Iterable[Type[Instance]]:
@@ -244,201 +257,141 @@ class EdgeProbingTask(Task):
     def update_subset_metrics(logits, labels, tagmask=None):
       return
 
-@register_task('gap-coreference', rel_path = 'processed/gap-coreference')
-class GapCoreferenceTask(EdgeProbingTask):
-    def __init__(self, path, single_sided=False, **kw):
-        self._files_by_split = {'train': "__development__", 'val': "__validation__",'test': "__test__"}
-        super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=single_sided, **kw)
+@register_task('ultrafine', rel_path = 'ultrafine')
+class UltrafinedCoreferenceTask(EdgeProbingTask):
+    def __init__(self, path, domain=["general", "fine", "finer"], single_sided=False, **kw):
+        self._domain_namespace = kw["name"] + "_tags"
+        self._files_by_split = {'train': "final_parsed_train.json", 'val': 'final_parsed_val.json', "test": "final_parsed_test.json"}
+        # current new one. 
+        self.macro_f1_scorer = MacroF1()
+        self.micro_f1_scorer = F1Measure(positive_label=1) #micro average
+        self.scorers = [self.macro_f1_scorer, self.micro_f1_scorer]
+        self.domains = domain
+        self.tag_list = domain
+        num_domains = 3
+        self.subset_scorers = create_subset_scorers(num_domains, F1Measure, positive_label=1)
+        self.subset_scorers.extend(create_subset_scorers(num_domains, MacroF1))
+        super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=True, **kw)
 
-    def make_instance(self, record, idx, indexers) -> Type[Instance]:
-        """Convert a single record to an AllenNLP Instance."""
-        tokens = record['text'].split()  # already space-tokenized by Moses
-        tokens = self._pad_tokens(tokens)
-        text_field = sentence_to_text_field(tokens, indexers)
 
-        d = {}
-        d["idx"] = MetadataField(idx)
-
-        d['input1'] = text_field
-
-        d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
-                                 for t in record['targets']])
-        # single-sided. And we reused the cod ehre
-        if not self.single_sided:
-            d['span2s'] = ListField([self._make_span_field(t['span2'], text_field, 1)
-                                     for t in record['targets']])
-        # Always use multilabel targets, so be sure each label is a list.
-        labels = [[t['label']] for t in record['targets']]
-
-        d['labels'] = ListField([MultiLabelField(label_set, label_namespace=self._label_namespace, skip_indexing=False) for label_set in labels])
-        return Instance(d)
-
-    def process_split(self, split, indexers):
-        ''' Process split text into a list of AllenNLP Instances with tag masking'''
+    def process_split(self, records, indexers) -> Iterable[Type[Instance]]:
+        ''' Process split text into a list of AllenNLP Instances. '''
         def _map_fn(r, idx): 
           instance = self.make_instance(r, idx, indexers)
-          tag_field = MultiLabelField(r["gender"], label_namespace="tagids",skip_indexing=True, num_labels=len(self.tag_list))
+          tag_field = MultiLabelField([r["targets"][0]["type_category"]], label_namespace=self._domain_namespace)
           instance.add_field("tagmask", field=tag_field)
           return instance
-        instances = map(_map_fn, split, itertools.count())
-        return instances
-
-    def load_data(self):
-        tag_vocab = vocabulary.Vocabulary(counter=None)
-
-        iters_by_split = collections.OrderedDict()
-        import pandas as pd
-
-        def find(target, myList):
-            for i in range(len(myList)):
-                if myList[i] == target:
-                    yield i
-
-        for split in self._files_by_split.keys():
-            """
-               Only Loading all sentences of up to length max_seq_len.
-            """
-            data = pd.read_csv(self._files_by_split[split], delimiter="\t")
-            text = data["text"]
-            lengths = [len(sent.split(" ")) for sent in text.tolist()]
-            to_include = [1 if length < self.max_seq_len - 1  else 0 for length in lengths]
-            indices = [i for i,x in enumerate(to_include) if x == 1]
-            data = data.loc[indices]
-            text = data["text"].tolist()
-            s1start = data["prompt_start_index"].tolist()
-            s1end = data["prompt_end_index"].tolist()
-            s2start = data["candidate_start_index"].tolist()
-            s2end = data["candidate_end_index"].tolist()
-            labels_map = {True: "true", False: "false"}
-            labels = data["label"]
-            labels = labels.apply(lambda x: labels_map[x]).tolist()
-            tagids = data["gender"].tolist()
-            for tag in set(tagids):
-              tag_vocab.add_token_to_namespace(tag)
-            # we minus 2 here for tag_vocab so that we ignore @@unknown@@ etc
-            structured_data = [{"info": {"document_id": "XX","sentence_id":i}, "text": text[i], "gender": [tag_vocab.get_token_index(tagids[i]) - 2], "targets":[{"span1":[int(s1start[i]), int(s1end[i])], "label": labels[i], "span2":[int(s2start[i]), int(s2end[i])]}]} for i in range(len(text))]
-            iters_by_split[split] = structured_data
-        self.tag_list = utils.get_tag_list(tag_vocab)
-        subset_mcc_scorers = create_subset_scorers(count=len(self.tag_list), scorer_type=FastMatthews)
-        subset_acc_scorers = create_subset_scorers(count=len(self.tag_list), scorer_type=BooleanAccuracy)
-        subset_f1_scorers = create_subset_scorers(count=len(self.tag_list), scorer_type=F1Measure, positive_label=1)  # binary F1 overall
-        self.subset_scorers = {"mcc": subset_mcc_scorers, "acc": subset_acc_scorers, "f1": subset_f1_scorers}
-        return iters_by_split
+        return map(_map_fn, records, itertools.count())
 
     def update_subset_metrics(self, logits, labels, tagmask=None):
         logits, labels = logits.detach(), labels.detach()
-        _, preds = logits.max(dim=1)
+        targets = (labels == 1).nonzero()[:,1]
         if tagmask is not None:
-            binary_preds = logits.ge(0).long()  # {0,1}
-            update_subset_scorers(self.subset_scorers["mcc"], binary_preds, labels.long(), tagmask)
-            update_subset_scorers(self.subset_scorers["acc"], binary_preds, labels.long(), tagmask)
-            # F1Measure() expects [total_num_targets, n_classes, 2]
-            # to compute binarized F1.
-            binary_scores = torch.stack([-1 * logits, logits], dim=2)
-            update_subset_scorers(self.subset_scorers["f1"], binary_scores, labels, tagmask)
+          for subset_scorer in self.subset_scorers:
+            update_subset_scorers(self.subset_scorer, logits, labels, tagmask)
 
     def get_metrics(self, reset=False):
         '''Get metrics specific to the task'''
-        collected_metrics = {'mcc': self.mcc_scorer.get_metric(reset), 'accuracy': self.acc_scorer.get_metric(reset), "f1": self.f1_scorer.get_metric(reset)[2]}
+        f1 = self.f1_scorer.get_metric(reset)
+        micro_f1 = f1[0]
+        macro_f1 = f1[1]
+        collected_metrics = {"overall_micro_f1": micro_f1, "overall_macro_f1": macro_f1}
         for score_name, scorer in list(self.subset_scorers.items()):
-          collected_metrics.update(collect_subset_scores(scorer, score_name, self.tag_list, reset))
-        collected_metrics.update({"bias": collected_metrics["f1_Male"] / collected_metrics["f1_Female"]})
+          collected_metrics.update(collect_subset_scores(scorer, score_name, self.domains, reset))
         return collected_metrics
 
-##
 # Task definitions. We call the register_task decorator explicitly so that we
 # can group these in the code.
 ##
-
 
 ##
 # Core probing tasks. as featured in the paper.
 ##
 # Part-of-Speech tagging on OntoNotes.
 register_task('edges-pos-ontonotes',
-              rel_path='edges/ontonotes-constituents',
-              label_file="labels.pos.txt", files_by_split={
-                  'train': "consts_ontonotes_en_train.pos.json",
-                  'val': "consts_ontonotes_en_dev.pos.json",
-                  'test': "consts_ontonotes_en_test.pos.json",
-              }, single_sided=True)(EdgeProbingTask)
+               rel_path='edges/ontonotes-constituents',
+               label_file="labels.pos.txt", files_by_split={
+                   'train': "consts_ontonotes_en_train.pos.json",
+                   'val': "consts_ontonotes_en_dev.pos.json",
+                   'test': "consts_ontonotes_en_test.pos.json",
+               }, single_sided=True)(EdgeProbingTask)
 # Constituency labeling (nonterminals) on OntoNotes.
 register_task('edges-nonterminal-ontonotes',
-              rel_path='edges/ontonotes-constituents',
-              label_file="labels.nonterminal.txt", files_by_split={
-                  'train': "consts_ontonotes_en_train.nonterminal.json",
-                  'val': "consts_ontonotes_en_dev.nonterminal.json",
-                  'test': "consts_ontonotes_en_test.nonterminal.json",
-              }, single_sided=True)(EdgeProbingTask)
+               rel_path='edges/ontonotes-constituents',
+               label_file="labels.nonterminal.txt", files_by_split={
+                   'train': "consts_ontonotes_en_train.nonterminal.json",
+                   'val': "consts_ontonotes_en_dev.nonterminal.json",
+                   'test': "consts_ontonotes_en_test.nonterminal.json",
+               }, single_sided=True)(EdgeProbingTask)
 # Dependency edge labeling on English Web Treebank (UD).
 register_task('edges-dep-labeling-ewt', rel_path='edges/dep_ewt',
-              label_file="labels.txt", files_by_split={
-                  'train': "train.edges.json",
-                  'val': "dev.edges.json",
-                  'test': "test.edges.json",
-              }, is_symmetric=False)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "train.edges.json",
+                   'val': "dev.edges.json",
+                   'test': "test.edges.json",
+               }, is_symmetric=False)(EdgeProbingTask)
 # Entity type labeling on OntoNotes.
 register_task('edges-ner-ontonotes',
-              rel_path='edges/ontonotes-ner',
-              label_file="labels.txt", files_by_split={
-                  'train': "ner_ontonotes_en_train.json",
-                  'val': "ner_ontonotes_en_dev.json",
-                  'test': "ner_ontonotes_en_test.json",
-              }, single_sided=True)(EdgeProbingTask)
+               rel_path='edges/ontonotes-ner',
+               label_file="labels.txt", files_by_split={
+                   'train': "ner_ontonotes_en_train.json",
+                   'val': "ner_ontonotes_en_dev.json",
+                   'test': "ner_ontonotes_en_test.json",
+               }, single_sided=True)(EdgeProbingTask)
 # SRL CoNLL 2012 (OntoNotes), formulated as an edge-labeling task.
 register_task('edges-srl-conll2012', rel_path='edges/srl_conll2012',
-              label_file="labels.txt", files_by_split={
-                  'train': "train.edges.json",
-                  'val': "dev.edges.json",
-                  'test': "test.edges.json",
-              }, is_symmetric=False)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "train.edges.json",
+                   'val': "dev.edges.json",
+                   'test': "test.edges.json",
+               }, is_symmetric=False)(EdgeProbingTask)
 # Re-processed version of edges-coref-ontonotes, via AllenNLP data loaders.
 register_task('edges-coref-ontonotes-conll',
-              rel_path='edges/ontonotes-coref-conll',
-              label_file="labels.txt", files_by_split={
-                  'train': "coref_conll_ontonotes_en_train.json",
-                  'val': "coref_conll_ontonotes_en_dev.json",
-                  'test': "coref_conll_ontonotes_en_test.json",
-              }, is_symmetric=False)(EdgeProbingTask)
+               rel_path='edges/ontonotes-coref-conll',
+               label_file="labels.txt", files_by_split={
+                   'train': "coref_conll_ontonotes_en_train.json",
+                   'val': "coref_conll_ontonotes_en_dev.json",
+                   'test': "coref_conll_ontonotes_en_test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
 # SPR1, as an edge-labeling task (multilabel).
 register_task('edges-spr1', rel_path='edges/spr1',
-              label_file="labels.txt", files_by_split={
-                  'train': "spr1.train.json",
-                  'val': "spr1.dev.json",
-                  'test': "spr1.test.json",
-              }, is_symmetric=False)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "spr1.train.json",
+                   'val': "spr1.dev.json",
+                   'test': "spr1.test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
 # SPR2, as an edge-labeling task (multilabel).
 register_task('edges-spr2', rel_path='edges/spr2',
-              label_file="labels.txt", files_by_split={
-                  'train': "train.edges.json",
-                  'val': "dev.edges.json",
-                  'test': "test.edges.json",
-              }, is_symmetric=False)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "train.edges.json",
+                   'val': "dev.edges.json",
+                   'test': "test.edges.json",
+               }, is_symmetric=False)(EdgeProbingTask)
 # Definite pronoun resolution. Two labels.
 register_task('edges-dpr', rel_path='edges/dpr',
-              label_file="labels.txt", files_by_split={
-                  'train': "train.edges.json",
-                  'val': "dev.edges.json",
-                  'test': "test.edges.json",
-              }, is_symmetric=False)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "train.edges.json",
+                   'val': "dev.edges.json",
+                   'test': "test.edges.json",
+               }, is_symmetric=False)(EdgeProbingTask)
 # Relation classification on SemEval 2010 Task8. 19 labels.
 register_task('edges-rel-semeval', rel_path='edges/semeval',
-              label_file="labels.txt", files_by_split={
-                  'train': "train.0.85.json",
-                  'val': "dev.json",
-                  'test': "test.json",
-              }, is_symmetric=False)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "train.0.85.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
 
 ##
 # New or experimental tasks.
 ##
 # Relation classification on TACRED. 42 labels.
 register_task('edges-rel-tacred', rel_path='edges/tacred/rel',
-              label_file="labels.txt", files_by_split={
-                  'train': "train.json",
-                  'val': "dev.json",
-                  'test': "test.json",
-              }, is_symmetric=False)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "train.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
 
 ##
 # Older tasks or versions for backwards compatibility.
@@ -447,65 +400,66 @@ register_task('edges-rel-tacred', rel_path='edges/tacred/rel',
 # NOTE: these are probably silver labels from CoreNLP,
 # so this is of limited use as a target.
 register_task('edges-ner-tacred', rel_path='edges/tacred/entity',
-              label_file="labels.txt", files_by_split={
-                  'train': "train.json",
-                  'val': "dev.json",
-                  'test': "test.json",
-              }, single_sided=True)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "train.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, single_sided=True)(EdgeProbingTask)
 # SRL CoNLL 2005, formulated as an edge-labeling task.
 register_task('edges-srl-conll2005', rel_path='edges/srl_conll2005',
-              label_file="labels.txt", files_by_split={
-                  'train': "train.edges.json",
-                  'val': "dev.edges.json",
-                  'test': "test.wsj.edges.json",
-              }, is_symmetric=False)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "train.edges.json",
+                   'val': "dev.edges.json",
+                   'test': "test.wsj.edges.json",
+               }, is_symmetric=False)(EdgeProbingTask)
 # Coreference on OntoNotes corpus. Two labels.
 register_task('edges-coref-ontonotes', rel_path='edges/ontonotes-coref',
-              label_file="labels.txt", files_by_split={
-                  'train': "train.edges.json",
-                  'val': "dev.edges.json",
-                  'test': "test.edges.json",
-              }, is_symmetric=False)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "train.edges.json",
+                   'val': "dev.edges.json",
+                   'test': "test.edges.json",
+               }, is_symmetric=False)(EdgeProbingTask)
 # Entity type labeling on CoNLL 2003.
 register_task('edges-ner-conll2003', rel_path='edges/ner_conll2003',
-              label_file="labels.txt", files_by_split={
-                  'train': "CoNLL-2003_train.json",
-                  'val': "CoNLL-2003_dev.json",
-                  'test': "CoNLL-2003_test.json",
-              }, single_sided=True)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "CoNLL-2003_train.json",
+                   'val': "CoNLL-2003_dev.json",
+                   'test': "CoNLL-2003_test.json",
+               }, single_sided=True)(EdgeProbingTask)
 # Dependency edge labeling on UD treebank (GUM). Use 'ewt' version instead.
 register_task('edges-dep-labeling', rel_path='edges/dep',
-              label_file="labels.txt", files_by_split={
-                  'train': "train.json",
-                  'val': "dev.json",
-                  'test': "test.json",
-              }, is_symmetric=False)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "train.json",
+                   'val': "dev.json",
+                   'test': "test.json",
+               }, is_symmetric=False)(EdgeProbingTask)
 # PTB constituency membership / labeling.
 register_task('edges-constituent-ptb', rel_path='edges/ptb-membership',
-              label_file="labels.txt", files_by_split={
-                  'train': "ptb_train.json",
-                  'val': "ptb_dev.json",
-                  'test': "ptb_test.json",
-              }, single_sided=True)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "ptb_train.json",
+                   'val': "ptb_dev.json",
+                   'test': "ptb_test.json",
+               }, single_sided=True)(EdgeProbingTask)
 # Constituency membership / labeling on OntoNotes.
 register_task('edges-constituent-ontonotes',
-              rel_path='edges/ontonotes-constituents',
-              label_file="labels.txt", files_by_split={
-                  'train': "consts_ontonotes_en_train.json",
-                  'val': "consts_ontonotes_en_dev.json",
-                  'test': "consts_ontonotes_en_test.json",
-              }, single_sided=True)(EdgeProbingTask)
+               rel_path='edges/ontonotes-constituents',
+               label_file="labels.txt", files_by_split={
+                   'train': "consts_ontonotes_en_train.json",
+                   'val': "consts_ontonotes_en_dev.json",
+                   'test': "consts_ontonotes_en_test.json",
+               }, single_sided=True)(EdgeProbingTask)
 # CCG tagging (tokens only).
 register_task('edges-ccg-tag', rel_path='edges/ccg_tag',
-              label_file="labels.txt", files_by_split={
-                  'train': "ccg.tag.train.json",
-                  'val': "ccg.tag.dev.json",
-                  'test': "ccg.tag.test.json",
-              }, single_sided=True)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "ccg.tag.train.json",
+                   'val': "ccg.tag.dev.json",
+                   'test': "ccg.tag.test.json",
+               }, single_sided=True)(EdgeProbingTask)
 # CCG parsing (constituent labeling).
 register_task('edges-ccg-parse', rel_path='edges/ccg_parse',
-              label_file="labels.txt", files_by_split={
-                  'train': "ccg.parse.train.json",
-                  'val': "ccg.parse.dev.json",
-                  'test': "ccg.parse.test.json",
-              }, single_sided=True)(EdgeProbingTask)
+               label_file="labels.txt", files_by_split={
+                   'train': "ccg.parse.train.json",
+                   'val': "ccg.parse.dev.json",
+                   'test': "ccg.parse.test.json",
+               }, single_sided=True)(EdgeProbingTask)
+

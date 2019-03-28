@@ -54,15 +54,22 @@ def retokenize_record(record, tokenizer_name):
     """Retokenize an edge probing example. Modifies in-place."""
     text = record['text']
     aligner_fn = retokenize.get_aligner_fn(tokenizer_name)
-    ta, new_tokens = aligner_fn(text)
+    span1 =  record["targets"][0]["span1"]
+    current_num = 0
+    _, new_tokens = aligner_fn(text[:span1[0]])
+    current_num += len(new_tokens)
+    print(new_tokens)
+    span1_start = current_num
+    _, new_tokens = aligner_fn(text[span1[0]: span1[1]])
+    print(new_tokens)
+    current_num += len(new_tokens)
+    span1_end = current_num
+    _, new_tokens = aligner_fn(text)
+    record["targets"][0]['span1'] = (span1_start, span1_end)
     record['text'] = " ".join(new_tokens)
-    for target in record['targets']:
-        if 'span1' in target:
-            target['span1'] = list(map(int,
-                                       ta.project_span(*target['span1'])))
-        if 'span2' in target:
-            target['span2'] = list(map(int,
-                                       ta.project_span(*target['span2'])))
+    print(record['text'])
+    print([span1_start, span1_end])
+    print(record)
     return record
 
 def _map_fn(line, tokenizer_name):
