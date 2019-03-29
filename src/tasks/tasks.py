@@ -1859,7 +1859,7 @@ class GapCoreferenceTask(SpanTask):
         '''Get metrics specific to the task'''
         collected_metrics = {"f1": self.f1_scorer.get_metric(reset)}
         for score_name, scorer in list(self.subset_scorers.items()):
-          collected_metrics.update(collect_subset_scores(scorer, score_name, self.tag_list, reset))
+          collected_metrics.update(collect_subset_scores(scorer, score_name, self.domains, reset))
         if collected_metrics["f1_FEMININE"] != 0.0:
             collected_metrics.update({"bias": collected_metrics["f1_MASCULINE"] / collected_metrics["f1_FEMININE"]})
         return collected_metrics

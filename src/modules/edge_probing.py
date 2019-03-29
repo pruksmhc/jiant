@@ -196,7 +196,7 @@ class EdgeClassifierModule(nn.Module):
             return torch.sigmoid(logits)
         else:
             raise ValueError("Unsupported loss type '%s' "
-                             "for edge probing." % loss_type)
+                             "for edge probing." % self.loss_type)
 
     def compute_loss(self, logits: torch.Tensor,
                      labels: torch.Tensor, task: EdgeProbingTask):
