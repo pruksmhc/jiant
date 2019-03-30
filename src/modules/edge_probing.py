@@ -128,7 +128,6 @@ class EdgeClassifierModule(nn.Module):
             out: dict(str -> Tensor)
         """
         out = {}
-
         batch_size = sent_embs.shape[0]
         out['n_inputs'] = batch_size
 
@@ -340,8 +339,7 @@ class ExternalInputEdgeClassifierModule(nn.Module):
                 sent_embs: torch.Tensor,
                 sent_mask: torch.Tensor,
                 task: EdgeProbingTask,
-                predict: bool,
-                type_embs: torch.Tensor = None) -> Dict:
+                predict: bool) -> Dict:
         """ Run forward pass.
 
         Expects batch to have the following entries:
@@ -373,7 +371,6 @@ class ExternalInputEdgeClassifierModule(nn.Module):
         se_proj1 = self.projs[1](sent_embs_t).transpose(2, 1).contiguous()
         if not self.single_sided:
             se_proj2 = self.projs[2](sent_embs_t).transpose(2, 1).contiguous()
-        import pdb; pdb.set_trace()
         # Span extraction.
         # [batch_size, num_targets] bool
         span_mask = (batch['span1s'][:, :, 0] != -1)
@@ -393,8 +390,6 @@ class ExternalInputEdgeClassifierModule(nn.Module):
         else:
             span_emb = span1_emb
 
-        if type_embs is not None:
-            span_emb = torch.cat([span_emb, type_embs], dim = 2)
         # [batch_size, num_targets, n_classes]
         logits = self.classifier(span_emb)
         out['logits'] = logits

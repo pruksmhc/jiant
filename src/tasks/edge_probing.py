@@ -269,8 +269,8 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
         self.domains = domain
         self.tag_list = domain
         num_domains = 3
-        self.subset_scorers = create_subset_scorers(num_domains, F1Measure, positive_label=1)
-        self.subset_scorers.extend(create_subset_scorers(num_domains, MacroF1))
+        self.micro_subset_scorers = create_subset_scorers(num_domains, F1Measure, positive_label=1)
+        self.macro_subset_scorers = create_subset_scorers(num_domains, MacroF1)
         super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=True, **kw)
 
     def make_instance(self, record, idx, indexers) -> Type[Instance]:
@@ -325,8 +325,18 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
         logits, labels = logits.detach(), labels.detach()
         targets = (labels == 1).nonzero()[:,1]
         if tagmask is not None:
-          for subset_scorer in self.subset_scorers:
-            update_subset_scorers(self.subset_scorer, logits, labels, tagmask)
+             update_subset_scorers(self.micro_subset_scorers, logits, targets, tagmask)
+             update_subset_scorers(self.macro_subset_scorers, logits, targets, tagmask)
+
+    def get_sentences(self) -> Iterable[Sequence[str]]:
+        ''' Yield sentences, used to compute vocabulary. '''
+        for split, iter in self._iters_by_split.items():
+            # Don't use test set for vocab building.
+            if split.startswith("test"):
+                continue
+            for record in iter:
+                yield record["text"].split()
+                yield record["targets"][0]['span2']
 
     def get_sentences(self) -> Iterable[Sequence[str]]:
         ''' Yield sentences, used to compute vocabulary. '''
