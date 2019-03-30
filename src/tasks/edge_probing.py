@@ -323,10 +323,20 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
 
     def update_subset_metrics(self, logits, labels, tagmask=None):
         logits, labels = logits.detach(), labels.detach()
-        targets = (labels == 1).nonzero()[:,1]
+        binary_scores = torch.stack([-1 * logits, logits], dim=2)
         if tagmask is not None:
-             update_subset_scorers(self.micro_subset_scorers, logits, targets, tagmask)
-             update_subset_scorers(self.macro_subset_scorers, logits, targets, tagmask)
+             update_subset_scorers(self.micro_subset_scorers, binary_scores, targets, tagmask)
+             update_subset_scorers(self.macro_subset_scorers, binary_scores, targets, tagmask)
+
+    def get_sentences(self) -> Iterable[Sequence[str]]:
+        ''' Yield sentences, used to compute vocabulary. '''
+        for split, iter in self._iters_by_split.items():
+            # Don't use test set for vocab building.
+            if split.startswith("test"):
+                continue
+            for record in iter:
+                yield record["text"].split()
+                yield record["targets"][0]['span2']
 
     def get_sentences(self) -> Iterable[Sequence[str]]:
         ''' Yield sentences, used to compute vocabulary. '''
