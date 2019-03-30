@@ -125,7 +125,7 @@ class EdgeProbingTask(Task):
         self.mcc_scorer = FastMatthews()
         self.acc_scorer = BooleanAccuracy()  # binary accuracy
         self.f1_scorer = F1Measure(positive_label=1)  # binary F1 overall
-        self.val_metric = "%s_f1" % self.name  # TODO: switch to MCC?
+        self.val_metric = "overall_micro_f1"
         self.val_metric_decreases = False
 
     def _stream_records(self, filename):
