@@ -541,7 +541,7 @@ class SamplingMultiTaskTrainer:
             # Intermediate log to logger and tensorboard
             if time.time() - task_info['last_log'] > self._log_interval:
                 task_metrics = task.get_metrics()
-
+                print(task_metrics)
                 # log to tensorboard
                 if self._TB_dir is not None:
                     task_metrics_to_TB = task_metrics.copy()
@@ -683,6 +683,7 @@ class SamplingMultiTaskTrainer:
 
         # Get validation numbers for each task
         for task in tasks:
+            all_val_metrics.update({task.val_metric: 0.0})
             n_examples, batch_num = 0, 0
             task_info = task_infos[task.name]
 
