@@ -67,9 +67,8 @@ def retokenize_record(record, tokenizer_name):
     _, new_tokens = aligner_fn(text)
     record["targets"][0]['span1'] = (span1_start, span1_end)
     record['text'] = " ".join(new_tokens)
-    print(record['text'])
-    print([span1_start, span1_end])
-    print(record)
+    _, span2_tokens = aligner_fn(record["targets"][0]['span2'])
+    record["targets"][0]['span2'] = span2_tokens
     return record
 
 def _map_fn(line, tokenizer_name):
