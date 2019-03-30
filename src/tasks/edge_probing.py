@@ -350,14 +350,11 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
 
     def get_metrics(self, reset=False):
         '''Get metrics specific to the task'''
-        f1 = self.f1_scorer.get_metric(reset)
-        micro_f1 = f1[0]
-        macro_f1 = f1[1]
+        micro_f1 = self.micro_f1_scorer.get_metric(reset)[2]
+        macro_f1 = self.macro_f1_scorer.get_metric(reset)
         collected_metrics = {"overall_micro_f1": micro_f1, "overall_macro_f1": macro_f1}
-        for score_name, scorer in zip(self.domains, self.micro_subset_scorers):
-          collected_metrics.update(collect_subset_scores(scorer, "microF1"+score_name, self.domains, reset))
-        for score_name, scorer in zip(self.domains, self.macro_subset_scorers):
-          collected_metrics.update(collect_subset_scores(scorer, "macroF1"+score_name, self.domains, reset))
+        collected_metrics.update(collect_subset_scores(self.micro_subset_scorers, "microF1", self.domains, reset))
+        collected_metrics.update(collect_subset_scores(self.macro_subset_scorers, "macroF1", self.domains, reset))
         return collected_metrics
 
 ##
