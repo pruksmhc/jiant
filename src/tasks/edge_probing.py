@@ -125,7 +125,7 @@ class EdgeProbingTask(Task):
         self.mcc_scorer = FastMatthews()
         self.acc_scorer = BooleanAccuracy()  # binary accuracy
         self.f1_scorer = F1Measure(positive_label=1)  # binary F1 overall
-        self.val_metric = "overall_micro_f1"
+        self.val_metric = "ultrafine_f1"
         self.val_metric_decreases = False
 
     def _stream_records(self, filename):
@@ -351,6 +351,10 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
     def get_metrics(self, reset=False):
         '''Get metrics specific to the task'''
         micro_f1 = self.micro_f1_scorer.get_metric(reset)[2]
+        print("ACRO F1 SCORERE FOR WHERE 0 IS POSITIVE. ")
+        print(self.macro_f1_scorer.f1_neg_class.get_metric())
+        print("ACRO F1 SCORERE FOR WHERE 1 IS POSITIVE. ")
+        print(self.macro_f1_scorer.f1_pos_class.get_metric())
         macro_f1 = self.macro_f1_scorer.get_metric(reset)
         collected_metrics = {"overall_micro_f1": micro_f1, "overall_macro_f1": macro_f1}
         collected_metrics.update(collect_subset_scores(self.micro_subset_scorers, "microF1", self.domains, reset))
@@ -359,6 +363,112 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
           if v.startswith("micro"):
             collected_metrics[v] = collected_metrics[v][2]
         return collected_metrics
+
+
+@register_task('atomic', rel_path = 'atomic')
+class UltrafinedCoreferenceTask(EdgeProbingTask):
+    def __init__(self, path, domain=["general", "fine", "finer"], single_sided=False, **kw):
+        self._domain_namespace = kw["name"] + "_tags"
+        self._files_by_split = {'train': "final_parsed_train.json", 'val': 'final_parsed_val.json', "test": "final_parsed_test.json"}
+        # current new one. 
+        self.macro_f1_scorer = MacroF1()
+        self.micro_f1_scorer = F1Measure(positive_label=1) #micro average
+        self.scorers = [self.macro_f1_scorer, self.micro_f1_scorer]
+        self.domains = domain
+        self.tag_list = domain
+        num_domains = 3
+        self.micro_subset_scorers = create_subset_scorers(num_domains, F1Measure, positive_label=1)
+        self.macro_subset_scorers = create_subset_scorers(num_domains, MacroF1)
+        super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=True, **kw)
+
+    def make_instance(self, record, idx, indexers) -> Type[Instance]:
+        """Convert a single record to an AllenNLP Instance."""
+        tokens = record['text'].split()  # already space-tokenized by Moses
+        tokens = self._pad_tokens(tokens)
+        type_label_tokens = record["targets"][0]['span2']
+        type_length = len(type_label_tokens)
+    
+        offset = len(tokens) + type_length - 512
+        # if the length of tokens and the appended type is too much.
+        if len(tokens) + type_length > 512:
+          span_indices = record["targets"][0]['span1']
+          # make sure you strip the part of the text that doesn't contain the 
+          # span
+          if span_indices[0] < len(tokens) - offset:
+            # remove the right end of the text
+            tokens = tokens[:len(tokens) - offset - 1] + [tokens[-1]]
+          else:
+            # remove left end
+            tokens = tokens[0] + tokens[len(tokens) - offset + 1:]
+        tokens.extend(type_label_tokens)# append to become [CLS] text [SEP] label
+        text_field = sentence_to_text_field(tokens, indexers) # add to the vocabulary
+
+        d = {}
+        d["idx"] = MetadataField(idx)
+
+        d['input1'] = text_field
+        d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
+                                 for t in record['targets']])
+        if not self.single_sided:
+            d['span2s'] = ListField([self._make_span_field(t['span2'], text_field, 1)
+                                     for t in record['targets']])
+
+        d['span2s'] = sentence_to_text_field(record['targets'][0]["span2"], indexers)
+        # Always use multilabel targets, so be sure each label is a list.
+        labels = [utils.wrap_singleton_string(str(t['label']).lower())
+                  for t in record['targets']]
+        d['labels'] = ListField([MultiLabelField(label_set, label_namespace=self._label_namespace, skip_indexing=False) for label_set in labels])
+        return Instance(d)
+
+    def process_split(self, records, indexers) -> Iterable[Type[Instance]]:
+        ''' Process split text into a list of AllenNLP Instances. '''
+        def _map_fn(r, idx): 
+          instance = self.make_instance(r, idx, indexers)
+          tag_field = MultiLabelField([r["targets"][0]["type_category"]], label_namespace=self._domain_namespace)
+          instance.add_field("tagmask", field=tag_field)
+          return instance
+        return map(_map_fn, records, itertools.count())
+
+    def update_subset_metrics(self, logits, labels, tagmask=None):
+        logits, labels = logits.detach(), labels.detach()
+        binary_scores = torch.stack([-1 * logits, logits], dim=2)
+        if tagmask is not None:
+             update_subset_scorers(self.micro_subset_scorers, binary_scores, labels, tagmask)
+             update_subset_scorers(self.macro_subset_scorers, binary_scores, labels, tagmask)
+
+    def get_sentences(self) -> Iterable[Sequence[str]]:
+        ''' Yield sentences, used to compute vocabulary. '''
+        for split, iter in self._iters_by_split.items():
+            # Don't use test set for vocab building.
+            if split.startswith("test"):
+                continue
+            for record in iter:
+                yield record["text"].split()
+                yield record["targets"][0]['span2']
+
+    def get_sentences(self) -> Iterable[Sequence[str]]:
+        ''' Yield sentences, used to compute vocabulary. '''
+        for split, iter in self._iters_by_split.items():
+            # Don't use test set for vocab building.
+            if split.startswith("test"):
+                continue
+            for record in iter:
+                yield record["text"].split()
+                yield record["targets"][0]['span2']
+
+    def get_metrics(self, reset=False):
+        '''Get metrics specific to the task'''
+        micro_f1 = self.micro_f1_scorer.get_metric(reset)[2]
+        print(self.macro_f1_scorer.f1_neg_class.get_metric())
+        macro_f1 = self.macro_f1_scorer.get_metric(reset)
+        collected_metrics = {"ultrafine_f1": micro_f1, "overall_macro_f1": macro_f1}
+        collected_metrics.update(collect_subset_scores(self.micro_subset_scorers, "microF1", self.domains, reset))
+        collected_metrics.update(collect_subset_scores(self.macro_subset_scorers, "macroF1", self.domains, reset))
+        for v,k in collected_metrics.items():
+          if v.startswith("micro"):
+            collected_metrics[v] = collected_metrics[v][2]
+        return collected_metrics
+
 
 ##
 # Core probing tasks. as featured in the paper.
