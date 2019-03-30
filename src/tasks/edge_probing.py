@@ -354,10 +354,10 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
         micro_f1 = f1[0]
         macro_f1 = f1[1]
         collected_metrics = {"overall_micro_f1": micro_f1, "overall_macro_f1": macro_f1}
-        for score_name, scorer in list(self.micro_subset_scorers.items()):
-          collected_metrics.update(collect_subset_scores(scorer, "micro"+score_name, self.domains, reset))
-        for score_name, scorer in list(self.micro_subset_scorers.items()):
-          collected_metrics.update(collect_subset_scores(scorer, "macro"+score_name, self.domains, reset))
+        for score_name, scorer in zip(self.domains, self.micro_subset_scorers):
+          collected_metrics.update(collect_subset_scores(scorer, "microF1"+score_name, self.domains, reset))
+        for score_name, scorer in zip(self.domains, self.macro_subset_scorers):
+          collected_metrics.update(collect_subset_scores(scorer, "macroF1"+score_name, self.domains, reset))
         return collected_metrics
 
 ##
