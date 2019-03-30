@@ -224,20 +224,18 @@ class EdgeClassifierModule(nn.Module):
         Returns:
             loss: scalar Tensor
         """
-        binary_preds = logits.ge(0).long()  # {0,1}
-
-        # Matthews coefficient and accuracy computed on {0,1} labels.
-        task.mcc_scorer(binary_preds, labels.long())
-        task.acc_scorer(binary_preds, labels.long())
-
-        # F1Measure() expects [total_num_targets, n_classes, 2]
-        # to compute binarized F1.
+        logits, labels = logits.detach(), labels.detach()
         binary_scores = torch.stack([-1 * logits, logits], dim=2)
-        task.f1_scorer(binary_scores, labels)
+       
+        task.macro_f1_scorer(binary_scores, targets.long())
+        task.micro_f1_scorer(binary_scores, labels)
 
         if self.loss_type == 'sigmoid':
             return F.binary_cross_entropy(torch.sigmoid(logits),
                                           labels.float())
+        elif self.loss_type == 'softmax':
+            targets = (labels == 1).nonzero()[:,1]
+            return F.cross_entropy(logits, targets.long())
         else:
             raise ValueError("Unsupported loss type '%s' "
                              "for edge probing." % self.loss_type)
