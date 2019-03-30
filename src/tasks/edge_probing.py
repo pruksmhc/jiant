@@ -38,7 +38,7 @@ class MacroF1():
     self.f1_pos_class = F1Measure(positive_label=1)
     self.f1_neg_class = F1Measure(positive_label=0)
 
-  def __call__(self, logits, labels, reset):
+  def __call__(self, logits, labels):
     self.f1_pos_class(logits, labels)
     self.f1_neg_class(logits, labels)
 
@@ -325,8 +325,8 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
         logits, labels = logits.detach(), labels.detach()
         binary_scores = torch.stack([-1 * logits, logits], dim=2)
         if tagmask is not None:
-             update_subset_scorers(self.micro_subset_scorers, binary_scores, targets, tagmask)
-             update_subset_scorers(self.macro_subset_scorers, binary_scores, targets, tagmask)
+             update_subset_scorers(self.micro_subset_scorers, binary_scores, labels, tagmask)
+             update_subset_scorers(self.macro_subset_scorers, binary_scores, labels, tagmask)
 
     def get_sentences(self) -> Iterable[Sequence[str]]:
         ''' Yield sentences, used to compute vocabulary. '''
