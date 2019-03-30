@@ -227,7 +227,7 @@ class EdgeClassifierModule(nn.Module):
         logits, labels = logits.detach(), labels.detach()
         binary_scores = torch.stack([-1 * logits, logits], dim=2)
        
-        task.macro_f1_scorer(binary_scores, targets.long())
+        task.macro_f1_scorer(binary_scores, labels)
         task.micro_f1_scorer(binary_scores, labels)
 
         if self.loss_type == 'sigmoid':
