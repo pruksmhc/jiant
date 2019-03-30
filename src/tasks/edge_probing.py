@@ -355,6 +355,9 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
         collected_metrics = {"overall_micro_f1": micro_f1, "overall_macro_f1": macro_f1}
         collected_metrics.update(collect_subset_scores(self.micro_subset_scorers, "microF1", self.domains, reset))
         collected_metrics.update(collect_subset_scores(self.macro_subset_scorers, "macroF1", self.domains, reset))
+        for v,k in collected_metrics.items():
+          if v.startswith("micro"):
+            collected_metrics[v] = collected_metrics[v][2]
         return collected_metrics
 
 ##
