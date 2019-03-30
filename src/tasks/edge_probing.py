@@ -273,6 +273,44 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
         self.subset_scorers.extend(create_subset_scorers(num_domains, MacroF1))
         super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=True, **kw)
 
+    def make_instance(self, record, idx, indexers) -> Type[Instance]:
+        """Convert a single record to an AllenNLP Instance."""
+        tokens = record['text'].split()  # already space-tokenized by Moses
+        tokens = self._pad_tokens(tokens)
+        type_label_tokens = record["targets"][0]['span2']
+        type_length = len(type_label_tokens)
+    
+        offset = len(tokens) + type_length - 512
+        # if the length of tokens and the appended type is too much.
+        if len(tokens) + type_length > 512:
+          span_indices = record["targets"][0]['span1']
+          # make sure you strip the part of the text that doesn't contain the 
+          # span
+          if span_indices[0] < len(tokens) - offset:
+            # remove the right end of the text
+            tokens = tokens[:len(tokens) - offset - 1] + [tokens[-1]]
+          else:
+            # remove left end
+            tokens = tokens[0] + tokens[len(tokens) - offset + 1:]
+        tokens.extend(type_label_tokens)# append to become [CLS] text [SEP] label
+        text_field = sentence_to_text_field(tokens, indexers) # add to the vocabulary
+
+        d = {}
+        d["idx"] = MetadataField(idx)
+
+        d['input1'] = text_field
+        d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
+                                 for t in record['targets']])
+        if not self.single_sided:
+            d['span2s'] = ListField([self._make_span_field(t['span2'], text_field, 1)
+                                     for t in record['targets']])
+
+        d['span2s'] = sentence_to_text_field(record['targets'][0]["span2"], indexers)
+        # Always use multilabel targets, so be sure each label is a list.
+        labels = [utils.wrap_singleton_string(str(t['label']).lower())
+                  for t in record['targets']]
+        d['labels'] = ListField([MultiLabelField(label_set, label_namespace=self._label_namespace, skip_indexing=False) for label_set in labels])
+        return Instance(d)
 
     def process_split(self, records, indexers) -> Iterable[Type[Instance]]:
         ''' Process split text into a list of AllenNLP Instances. '''
@@ -290,6 +328,16 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
           for subset_scorer in self.subset_scorers:
             update_subset_scorers(self.subset_scorer, logits, labels, tagmask)
 
+    def get_sentences(self) -> Iterable[Sequence[str]]:
+        ''' Yield sentences, used to compute vocabulary. '''
+        for split, iter in self._iters_by_split.items():
+            # Don't use test set for vocab building.
+            if split.startswith("test"):
+                continue
+            for record in iter:
+                yield record["text"].split()
+                yield record["targets"][0]['span2']
+
     def get_metrics(self, reset=False):
         '''Get metrics specific to the task'''
         f1 = self.f1_scorer.get_metric(reset)
@@ -299,10 +347,6 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
         for score_name, scorer in list(self.subset_scorers.items()):
           collected_metrics.update(collect_subset_scores(scorer, score_name, self.domains, reset))
         return collected_metrics
-
-# Task definitions. We call the register_task decorator explicitly so that we
-# can group these in the code.
-##
 
 ##
 # Core probing tasks. as featured in the paper.

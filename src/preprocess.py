@@ -225,7 +225,6 @@ def _build_vocab(args, tasks, vocab_path: str):
     if args.bert_model_name:
         # Add pre-computed BPE vocabulary for BERT model.
         add_bert_wpm_vocab(vocab, args.bert_model_name)
-
     vocab.save_to_files(vocab_path)
     log.info("\tSaved vocab to %s", vocab_path)
     #  del word2freq, char2freq, target2freq
