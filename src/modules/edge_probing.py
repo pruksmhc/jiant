@@ -224,7 +224,6 @@ class EdgeClassifierModule(nn.Module):
         Returns:
             loss: scalar Tensor
         """
-        logits, labels = logits.detach(), labels.detach()
         binary_scores = torch.stack([-1 * logits, logits], dim=2)
        
         task.macro_f1_scorer(binary_scores, labels)
