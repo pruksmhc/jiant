@@ -1093,6 +1093,30 @@ class WNLITask(PairClassificationTask):
         log.info("\tFinished loading Winograd.")
 
 
+@register_task('atomic', rel_path='atomic/')
+class AtomicTask(PairClassificationTask):
+    '''Class for Winograd NLI task'''
+
+    def __init__(self, path, max_seq_len, name, **kw):
+        ''' '''
+        super(AtomicTask, self).__init__(name, n_classes=2, **kw)
+        self.load_data(path, max_seq_len)
+        self.sentences = self.train_data_text[0] + self.train_data_text[1] + \
+            self.val_data_text[0] + self.val_data_text[1]
+
+    def load_data(self, path, max_seq_len):
+        '''Load the data'''
+        tr_data = load_tsv(self._tokenizer_name, os.path.join(path, "train.tsv"), max_seq_len,
+                           s1_idx=1, s2_idx=2, label_idx=3, skip_rows=1)
+        val_data = load_tsv(self._tokenizer_name, os.path.join(path, "dev.tsv"), max_seq_len,
+                            s1_idx=1, s2_idx=2, label_idx=3, skip_rows=1)
+        te_data = load_tsv(self._tokenizer_name, os.path.join(path, 'test.tsv'), max_seq_len,
+                           s1_idx=1, s2_idx=2, has_labels=False, return_indices=True, skip_rows=1)
+        self.train_data_text = tr_data
+        self.val_data_text = val_data
+        self.test_data_text = te_data
+        log.info("\tFinished loading Winograd.")
+
 @register_task('joci', rel_path='JOCI/')
 class JOCITask(PairOrdinalRegressionTask):
     '''Class for JOCI ordinal regression task'''
