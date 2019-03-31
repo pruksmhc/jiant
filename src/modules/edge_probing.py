@@ -5,13 +5,13 @@ import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
 from torch.autograd import Variable
-
+import logging as log
 from ..tasks.edge_probing import EdgeProbingTask, Task
 from .import modules
 
 from allennlp.modules.span_extractors import \
     EndpointSpanExtractor, SelfAttentiveSpanExtractor
-
+from allennlp.nn.util import move_to_device, device_mapping
 from typing import Dict, Iterable, List
 
  #TODO(Yada): Generalize to N-Span module.
@@ -104,14 +104,21 @@ class EdgeClassifierModule(nn.Module):
         batch_size = sent_embs.shape[0]
         out['n_inputs'] = batch_size
          # Apply projection CNN layer for each span.
+        cuda_device = -1
+        if torch.cuda.device_count() > 0:
+            cuda_device = torch.cuda.current_device()
+        log.info("cUDA")
+        log.info(cuda_device)
         sent_embs_t = sent_embs.transpose(1, 2)  # needed for CNN layer
+        sent_embs_t = move_to_device(sent_embs_t, cuda_device)
         se_projs = []
         for i in range(self.num_spans):
+            self.projs[i] = move_to_device(self.projs[i], cuda_device)
             se_proj = self.projs[i](sent_embs_t).transpose(2, 1).contiguous()
             se_projs.append(se_proj)
 
         # [batch_size, num_targets] bool
-        span_embs = torch.Tensor([])
+        span_embs = move_to_device(torch.Tensor([]), cuda_device)
         span_mask = (batch['span1s'][:, :, 0] != -1)
         out['mask'] = span_mask
         total_num_targets = span_mask.sum()
@@ -121,6 +128,7 @@ class EdgeClassifierModule(nn.Module):
                    span_indices_mask=span_mask.long())
         for i in range(self.num_spans):
             # span1_emb and span2_emb are [batch_size, num_targets, span_repr_dim]
+            self.span_extractors[i] = move_to_device(self.span_extractors[i], cuda_device)
             span_emb = self.span_extractors[i](se_projs[0], batch['span'+str(i+1)+'s'], **_kw)
             span_embs = torch.cat([span_embs, span_emb], dim=2)
 
