@@ -43,7 +43,7 @@ from .modules.modules import SentenceEncoder, BoWSentEncoder, \
     BiLMEncoder, ElmoCharacterEncoder, Classifier, Pooler, \
     SingleClassifier, PairClassifier, CNNEncoder, \
     NullPhraseLayer
-from .modules.edge_probing import EdgeClassifierModule
+from .modules.edge_probing import SpanClassifierModule
 from .modules.seq2seq_decoder import Seq2SeqDecoder
 
 
@@ -399,7 +399,7 @@ def build_task_specific_modules(task, model, d_sent, d_emb, vocab, embedder, arg
         hid2tag = build_tagger(task, d_sent, task.num_tags)
         setattr(model, '%s_mdl' % task.name, hid2tag)
     elif isinstance(task, EdgeProbingTask):
-        module = EdgeClassifierModule(task, d_sent, task_params)
+        module = SpanClassifierModule(task, d_sent, task_params)
         setattr(model, '%s_mdl' % task.name, module)
     elif isinstance(task, (RedditSeq2SeqTask, Wiki103Seq2SeqTask)):
         log.info("using {} attention".format(args.s2s['attention']))

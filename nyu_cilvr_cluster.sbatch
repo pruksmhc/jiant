@@ -21,7 +21,12 @@ module load anaconda3
 module load cuda 10.0	
 source activate jiant_new	
 
-eval_cmd="do_target_task_training = 0, load_model=1, load_eval_checkpoint=\"winograd/bert_base_cased/small_bert_cased_rnn_enclr0.0001/model_state_main_epoch_3.best_macro.th\", do_full_eval = 1, batch_size = 8, write_preds = test, write_strict_glue_format = 1"
+eval_cmd="do_full_eval = 1, batch_size = 8, write_preds = test, write_strict_glue_format = 1"
 
-## Winograd training ##
-python main.py --config_file config/benchmarkssuperglue/superglue.conf --overrides "pretrain_tasks =winograd-coreference, project_dir=winograd, target_tasks=winograd-coreference, run_name = small_bert_cased_rnn_enclr0.0001,  bert_embeddings_mode = top, lr = 0.0001, ${eval_cmd}"
+## Winograd training with LR =0.01 with rnn encoder
+python main.py --config_file config/benchmarkssuperglue/superglue.conf --overrides "pretrain_tasks =winograd-coreference, do_pretrain=1, project_dir=winograd, target_tasks=winograd-coreference, run_name = small_bert_cased_rnn_enclr0.001,  bert_embeddings_mode = top, lr = 0.001"
+python main.py --config_file config/benchmarkssuperglue/superglue.conf --overrides "pretrain_tasks =winograd-coreference, do_target_task_training=1, project_dir=winograd, target_tasks=winograd-coreference, run_name = small_bert_cased_rnn_enclr0.001,  bert_embeddings_mode = top, lr = 0.001, ${eval_cmd}"
+
+## Winograd training with LR =0.01 with no encoder
+python main.py --config_file config/benchmarkssuperglue/superglue.conf --overrides "pretrain_tasks =winograd-coreference, do_pretrain=1, project_dir=winograd, target_tasks=winograd-coreference, run_name = small_bert_cased_null_enclr0.001,  bert_embeddings_mode = top, lr = 0.001"
+python main.py --config_file config/benchmarkssuperglue/superglue.conf --overrides "pretrain_tasks =winograd-coreference, do_target_task_training=1, project_dir=winograd, target_tasks=winograd-coreference, run_name = small_bert_cased_null_enclr0.001,  bert_embeddings_mode = top, lr = 0.001, ${eval_cmd}"
