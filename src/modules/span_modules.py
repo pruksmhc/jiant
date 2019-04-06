@@ -90,6 +90,21 @@ class TwoSpanClassifierModule(nn.Module):
                                                          task.n_classes,
                                                          task_params)
 
+    def get_predictions(self, logits: torch.Tensor):
+        """Return class probabilities, same shape as logits.
+        Args:
+            logits: [batch_size, num_targets, n_classes]
+        Returns:
+            probs: [batch_size, num_targets, n_classes]
+        """
+        if self.loss_type == 'sigmoid':
+            return torch.sigmoid(logits)
+        elif self.loss_type == "softmax":
+            return F.softmax(logits)
+        else:
+            raise ValueError("Unsupported loss type" % loss_type)
+
+
     def forward(self, batch: Dict,
                 sent_embs: torch.Tensor,
                 sent_mask: torch.Tensor,
@@ -154,7 +169,7 @@ class TwoSpanClassifierModule(nn.Module):
             out['loss'] = self.compute_loss(logits[span_mask],
                                             batch['labels'][span_mask],
                                             task)
-
+            task.update_subset_metrics(logits[span_mask], batch['labels'][span_mask], tagmask=batch["tagmask"])
         if predict:
             # Return preds as a list.
             preds = self.get_predictions(logits)
@@ -178,19 +193,6 @@ class TwoSpanClassifierModule(nn.Module):
                               torch.unbind(masks, dim=0)):
             yield pred[mask].numpy()  # only non-masked predictions
 
-    def get_predictions(self, logits: torch.Tensor):
-        """Return class probabilities, same shape as logits.
-        Args:
-            logits: [batch_size, num_targets, n_classes]
-        Returns:
-            probs: [batch_size, num_targets, n_classes]
-        """
-        if self.loss_type == 'sigmoid':
-            return torch.sigmoid(logits)
-        elif self.loss_type == "softmax":
-            return F.softmax(logits)
-        else:
-            raise ValueError("Unsupported loss type" % loss_type)
 
     def compute_loss(self, logits: torch.Tensor,
                      labels: torch.Tensor, task: Task):
@@ -214,12 +216,17 @@ class TwoSpanClassifierModule(nn.Module):
         binary_scores = torch.stack([-1 * logits, logits], dim=2)
         task.f1_scorer(binary_scores, labels)
 
-        if self.loss_type == 'sigmoid':
-            return F.binary_cross_entropy(torch.sigmoid(logits),
-                                          labels.float())
+         if self.loss_type == 'sigmoid':
+            if self.num_spans == 2:
+                return F.binary_cross_entropy(torch.sigmoid(logits),
+                                              labels.float())
+            else:
+                raise ValueError("Sigmoid only supported for binary output currently")
+        elif self.loss_type == "softmax":
+            targets = (labels == 1).nonzero()[:, 1]
+            return F.cross_entropy(logits, targets.long())
         else:
             raise ValueError("Unsupported loss type ." % self.loss_type)
-
 class ThreeSpanClassifierModule(TwoSpanClassifierModule):
     ''' 
     Extension of TwoSpan but where the input is 1 text and 3 spans.
