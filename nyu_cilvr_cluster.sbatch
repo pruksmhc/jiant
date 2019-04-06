@@ -25,12 +25,10 @@ module load anaconda3
 module load cuda 10.0	
 source activate jiant_new	
 
-eval_cmd="do_target_task_training = 1, do_full_eval = 1, batch_size = 8, write_preds = test, write_strict_glue_format = 1"
 
-## GAP training with null sent encoder,  lr = 0.0001 ## BERT LARGE
-python main.py --config_file config/baselinesuperglue/superglue.conf  --overrides "pretrain_tasks = gap-coreference,  target_tasks=gap-coreference, run_name = null_enc, project_dir=gap, bert_embeddings_mode = top,  exp_name=bert_large_uncased, sep_embs_for_skip=1,  sent_enc = \"null\", bert_model_name = bert-large-uncased, ${eval_cmd}"
+function ultrafinebertlarge() {
+    python main.py --config config/baselinesuperglue/superglue.conf --overrides " exp_name =ultrafine, run_name = bert_large-lr1e-5, pretrain_tasks = \"ultrafine\", target_tasks = \"ultrafine\", do_target_task_training = 0, do_pretrain = 1, do_full_eval = 1, write_preds=\"val\", max_seq_len = 128, bert_model_name=bert-base-uncased,  batch_size = 8, lr = .00001, max_epochs = 10"
+}
 
 
-# Nulle ncoder, BERT base
-python main.py --config_file config/baselinesuperglue/superglue.conf  --overrides "pretrain_tasks = gap-coreference, do_pretrain = 0,  target_tasks=gap-coreference, run_name = null_enc, project_dir=gap, bert_embeddings_mode = top,  exp_name=bert_base_uncased, sep_embs_for_skip=1, skip_embs = 1, sent_enc = \"null\", bert_model_name = bert-base-uncased, ${eval_cmd}"
-
+ultrafinebertlarge

@@ -194,9 +194,10 @@ class EdgeClassifierModule(nn.Module):
         """
         if self.loss_type == 'sigmoid':
             return torch.sigmoid(logits)
+        elif self.loss_type == "softmax":
+            return F.softmax(logits)
         else:
-            raise ValueError("Unsupported loss type '%s' "
-                             "for edge probing." % self.loss_type)
+            raise ValueError("Unsupported loss type" % loss_type)
 
     def compute_loss(self, logits: torch.Tensor,
                      labels: torch.Tensor, task: EdgeProbingTask):
@@ -219,10 +220,16 @@ class EdgeClassifierModule(nn.Module):
         # to compute binarized F1.
         binary_scores = torch.stack([-1 * logits, logits], dim=2)
         task.f1_scorer(binary_scores, labels)
-
+    
         if self.loss_type == 'sigmoid':
-            return F.binary_cross_entropy(torch.sigmoid(logits),
-                                          labels.float())
+            if self.num_spans == 2:
+                return F.binary_cross_entropy(torch.sigmoid(logits),
+                                              labels.float())
+            else:
+                raise ValueError("Sigmoid only supported for binary output currently")
+        elif self.loss_type == "softmax":
+            targets = (labels == 1).nonzero()[:, 1]
+            return F.cross_entropy(logits, targets.long())
         else:
-            raise ValueError("Unsupported loss type '%s' "
-                             "for edge probing." % self.loss_type)
+            raise ValueError("Unsupported loss type ." % self.loss_type)
+                                                                            

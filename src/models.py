@@ -440,7 +440,7 @@ def build_task_specific_modules(
         # TODO(Yada): Generalize this.
         module = ThreeSpanClassifierModule(task, d_sent, task_params)
         setattr(model, '%s_mdl' % task.name, module)
-    elif isinstance(task, EdgeProbingTask):
+    elif isinstance(task, EdgeProbingTask) or isinstance(task, SpanTask):
         module = EdgeClassifierModule(task, d_sent, task_params)
         setattr(model, '%s_mdl' % task.name, module)
     elif isinstance(task, (RedditSeq2SeqTask, Wiki103Seq2SeqTask)):

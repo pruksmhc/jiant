@@ -35,7 +35,7 @@ from ..utils import utils
 from ..utils.utils import truncate
 from ..utils.data_loaders import load_tsv, process_sentence, load_diagnostic_tsv
 from ..utils.tokenizers import get_tokenizer
-from ..scorers import gap_scorer
+from ..scorers import gap_scorer, macro_f1 
 
 from typing import Iterable, Sequence, List, Dict, Any, Type
 
@@ -1736,9 +1736,7 @@ class SpanTask(Task):
 
         d = {}
         d["idx"] = MetadataField(idx)
-
         d['input1'] = text_field
-
         for i in range(self.num_spans):
             d["span"+str(i)+"s"] = ListField([self._make_span_field(t['span'+str(i)], text_field, 1)
                                  for t in record['targets']])
@@ -1779,6 +1777,97 @@ class SpanTask(Task):
         metrics['recall'] = recall
         metrics['f1'] = f1
         return metrics
+
+
+@register_task('ultrafine', rel_path = 'ultrafine')
+class UltrafinedCoreferenceTask(SpanTask):
+    def __init__(self, path, domain=["general", "fine", "finer"], single_sided=False, **kw):
+        self._domain_namespace = kw["name"] + "_tags"
+        self._files_by_split = {'train': "final_parsed_train.json", 'val': 'final_parsed_val.json', "test": "final_parsed_test.json"}
+        # current new one. 
+        self.macro_f1_scorer = macro_f1.MacroF1()
+        self.micro_f1_scorer = F1Measure(positive_label=1) #micro average
+        self.scorers = [self.macro_f1_scorer, self.micro_f1_scorer]
+        self.domains = domain
+        self.tag_list = domain
+        num_domains = 3
+        self.micro_subset_scorers = create_subset_scorers(num_domains, F1Measure, positive_label=1)
+        self.macro_subset_scorers = create_subset_scorers(num_domains, macro_f1.MacroF1)
+        super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=True, **kw)
+
+    def make_instance(self, record, idx, indexers) -> Type[Instance]:
+        """Convert a single record to an AllenNLP Instance."""
+        tokens = record['text'].split()  # already space-tokenized by Moses
+        tokens = self._pad_tokens(tokens)
+        type_label_tokens = record["targets"][0]['span2']
+        type_length = len(type_label_tokens)
+    
+        offset = len(tokens) + type_length - 512
+        # if the length of tokens and the appended type is too much.
+        if len(tokens) + type_length > 512:
+          span_indices = record["targets"][0]['span1']
+          # make sure you strip the part of the text that doesn't contain the 
+          # span
+          if span_indices[0] < len(tokens) - offset:
+            # remove the right end of the text
+            tokens = tokens[:len(tokens) - offset - 1] + [tokens[-1]]
+          else:
+            # remove left end
+            tokens = tokens[0] + tokens[len(tokens) - offset + 1:]
+        tokens.extend(type_label_tokens)# append to become [CLS] text [SEP] label
+        text_field = sentence_to_text_field(tokens, indexers) # add to the vocabulary
+
+        d = {}
+        d["idx"] = MetadataField(idx)
+
+        d['input1'] = text_field
+        d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
+                                 for t in record['targets']])
+
+        d['span2s'] = sentence_to_text_field(record['targets'][0]["span2"], indexers)
+        # Always use multilabel targets, so be sure each label is a list.
+        labels = [utils.wrap_singleton_string(str(t['label']).lower())
+                  for t in record['targets']]
+        d['labels'] = ListField([MultiLabelField(label_set, label_namespace=self._label_namespace, skip_indexing=False) for label_set in labels])
+        return Instance(d)
+
+    def process_split(self, records, indexers) -> Iterable[Type[Instance]]:
+        ''' Process split text into a list of AllenNLP Instances. '''
+        def _map_fn(r, idx): 
+          instance = self.make_instance(r, idx, indexers)
+          tag_field = MultiLabelField([r["targets"][0]["type_category"]], label_namespace=self._domain_namespace)
+          instance.add_field("tagmask", field=tag_field)
+          return instance
+        return map(_map_fn, records, itertools.count())
+
+    def update_subset_metrics(self, logits, labels, tagmask=None):
+        logits, labels = logits.detach(), labels.detach()
+        binary_scores = torch.stack([-1 * logits, logits], dim=2)
+        if tagmask is not None:
+             update_subset_scorers(self.micro_subset_scorers, binary_scores, labels, tagmask)
+             update_subset_scorers(self.macro_subset_scorers, binary_scores, labels, tagmask)
+
+    def get_sentences(self) -> Iterable[Sequence[str]]:
+        ''' Yield sentences, used to compute vocabulary. '''
+        for split, iter in self._iters_by_split.items():
+            # Don't use test set for vocab building.
+            if split.startswith("test"):
+                continue
+            for record in iter:
+                yield record["text"].split()
+                yield record["targets"][0]['span2']
+
+    def get_metrics(self, reset=False):
+        '''Get metrics specific to the task'''
+        micro_f1 = self.micro_f1_scorer.get_metric(reset)[2]
+        macro_f1 = self.macro_f1_scorer.get_metric(reset)
+        collected_metrics = {"overall_micro_f1": micro_f1, "f1": macro_f1, "overall_macro_f1": macro_f1}
+        collected_metrics.update(collect_subset_scores(self.micro_subset_scorers, "microF1", self.domains, reset))
+        collected_metrics.update(collect_subset_scores(self.macro_subset_scorers, "macroF1", self.domains, reset))
+        for v,k in collected_metrics.items():
+          if v.startswith("micro"):
+            collected_metrics[v] = collected_metrics[v][2]
+        return collected_metrics
 
 @register_task('gap-coreference', rel_path = 'gap-coreference')
 class GapCoreferenceTask(SpanTask):

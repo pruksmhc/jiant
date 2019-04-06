@@ -187,6 +187,8 @@ class TwoSpanClassifierModule(nn.Module):
         """
         if self.loss_type == 'sigmoid':
             return torch.sigmoid(logits)
+        elif self.loss_type == "softmax":
+            return F.softmax(logits)
         else:
             raise ValueError("Unsupported loss type" % loss_type)
 
@@ -371,6 +373,13 @@ class ThreeSpanClassifierModule(TwoSpanClassifierModule):
         task.f1_scorer(logits, labels)
         targets = (labels == 1).nonzero()[:,1]
         if self.loss_type == 'sigmoid':
+            if self.num_spans == 2:
+                return F.binary_cross_entropy(torch.sigmoid(logits),
+                                              labels.float())
+            else:
+                raise ValueError("Sigmoid only supported for binary output currently")
+        elif self.loss_type == "softmax":
+            targets = (labels == 1).nonzero()[:, 1]
             return F.cross_entropy(logits, targets.long())
         else:
-            raise ValueError("Unsupported loss type '%s' " % self.loss_type)
+            raise ValueError("Unsupported loss type ." % self.loss_type)

@@ -1,0 +1,110 @@
+#!/usr/bin/env python
+
+# Helper script to retokenize edge-probing data.
+# Uses the given tokenizer, and saves results alongside the original files
+# as <fname>.retokenized.<tokenizer_name>
+#
+# Supported tokenizers:
+# - MosesTokenizer
+# - OpenAI.BPE: byte-pair-encoding model for OpenAI transformer LM;
+#     see https://github.com/openai/finetune-transformer-lm)
+# - bert-*: wordpiece models for BERT; see https://arxiv.org/abs/1810.04805
+#     and https://github.com/huggingface/pytorch-pretrained-BERT#usage
+#
+# Usage:
+#  python retokenize_edge_data.py <tokenizer_name> /path/to/data/*.json
+#
+# Speed: takes around 2.5 minutes to process 90000 sentences on a single core.
+#
+# Note: for OpenAI.BPE, this requires the `spacy` and `ftfy` packages.
+# These should only be needed for this script - main.py shouldn't need to do
+# any further preprocessing.
+#
+# Note: for BERT tokenizers, this requires the 'pytorch_pretrained_bert'
+# package.
+
+import argparse
+import functools
+import json
+import os
+import re
+import sys
+import multiprocessing
+from tqdm import tqdm
+
+import logging as log
+log.basicConfig(format='%(asctime)s: %(message)s',
+                datefmt='%m/%d %I:%M:%S %p', level=log.INFO)
+
+from src.utils import utils
+from src.utils import retokenize
+from src.utils import tokenizers
+
+from src.openai_transformer_lm import utils as openai_utils
+from pytorch_pretrained_bert import BertTokenizer
+
+from typing import Tuple, List, Text
+
+# For now, this module expects MosesTokenizer as the default.
+# TODO: change this once we have better support in core utils.
+MosesTokenizer = tokenizers.get_tokenizer("MosesTokenizer")
+assert MosesTokenizer is not None
+
+def retokenize_record(record, tokenizer_name):
+    """Retokenize an edge probing example. Modifies in-place."""
+    text = record['text']
+    aligner_fn = retokenize.get_aligner_fn(tokenizer_name)
+    span1 =  record["targets"][0]["span1"]
+    current_num = 0
+    _, new_tokens = aligner_fn(text[:span1[0]])
+    current_num += len(new_tokens)
+    print(new_tokens)
+    span1_start = current_num
+    _, new_tokens = aligner_fn(text[span1[0]: span1[1]])
+    print(new_tokens)
+    current_num += len(new_tokens)
+    span1_end = current_num
+    _, new_tokens = aligner_fn(text)
+    record["targets"][0]['span1'] = (span1_start, span1_end)
+    record['text'] = " ".join(new_tokens)
+    _, span2_tokens = aligner_fn(record["targets"][0]['span2'])
+    record["targets"][0]['span2'] = span2_tokens
+    return record
+
+def _map_fn(line, tokenizer_name):
+    record = json.loads(line)
+    new_record = retokenize_record(record, tokenizer_name)
+    return json.dumps(new_record)
+
+def retokenize_file(fname, tokenizer_name, worker_pool):
+    new_name = fname + ".retokenized." + tokenizer_name
+    log.info("Processing file: %s", fname)
+    inputs = list(utils.load_lines(fname))
+    log.info("  saving to %s", new_name)
+    map_fn = functools.partial(_map_fn,
+                               tokenizer_name=tokenizer_name)
+    with open(new_name, 'w') as fd:
+        for line in tqdm(worker_pool.imap(map_fn, inputs, chunksize=500),
+                         total=len(inputs)):
+            fd.write(line)
+            fd.write("\n")
+
+
+def main(args):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-t", dest='tokenizer_name', type=str, required=True,
+                        help="Tokenizer name.")
+    parser.add_argument("--num_parallel", type=int, default=4,
+                        help="Number of parallel processes to use.")
+    parser.add_argument('--inputs', type=str, nargs="+",
+                        help="Input JSON files.")
+    args = parser.parse_args(args)
+
+    worker_pool = multiprocessing.Pool(args.num_parallel)
+    for fname in args.inputs:
+        retokenize_file(fname, args.tokenizer_name, worker_pool=worker_pool)
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])
+    sys.exit(0)
