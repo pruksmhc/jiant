@@ -216,7 +216,7 @@ class TwoSpanClassifierModule(nn.Module):
         binary_scores = torch.stack([-1 * logits, logits], dim=2)
         task.f1_scorer(binary_scores, labels)
 
-         if self.loss_type == 'sigmoid':
+        if self.loss_type == 'sigmoid':
             if self.num_spans == 2:
                 return F.binary_cross_entropy(torch.sigmoid(logits),
                                               labels.float())
