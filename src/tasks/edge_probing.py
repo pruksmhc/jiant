@@ -116,14 +116,13 @@ class EdgeProbingTask(Task):
         skip_ctr = 0
         total_ctr = 0
         for records in utils.load_json_data(filename):
-            for record in records:
-                total_ctr += 1
-                # Skip records with empty targets.
-                # TODO(ian): don't do this if generating negatives!
-                if not record.get('targets', None):
-                    skip_ctr += 1
-                    continue
-                yield record
+            total_ctr += 1
+            # Skip records with empty targets.
+            # TODO(ian): don't do this if generating negatives!
+            if not records.get('targets', None):
+                skip_ctr += 1
+                continue
+            yield records
         log.info("Read=%d, Skip=%d, Total=%d from %s",
                  total_ctr - skip_ctr, skip_ctr, total_ctr,
                  filename)
@@ -242,9 +241,23 @@ class EdgeProbingTask(Task):
 @register_task('winograd-coreference', rel_path = 'winograd-coref')
 class WinogradCoreferenceTask(EdgeProbingTask):
     def __init__(self, path, single_sided=False, **kw):
-        self._files_by_split = {'train': "train", 'val': "val",'test': "test"}
+        self._files_by_split = {'train': "train_final", 'val': "val_final",'test': "test_final"}
         super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=single_sided, **kw)
 
+    def _stream_records(self, filename):
+        skip_ctr = 0
+        total_ctr = 0
+        for records in utils.load_json_data(filename):
+            total_ctr += 1
+            # Skip records with empty targets.
+            # TODO(ian): don't do this if generating negatives!
+            if not records.get('targets', None):
+                skip_ctr += 1
+                continue
+            yield records
+        log.info("Read=%d, Skip=%d, Total=%d from %s",
+                 total_ctr - skip_ctr, skip_ctr, total_ctr,
+                 filename)
 
 ##
 # Task definitions. We call the register_task decorator explicitly so that we
