@@ -59,6 +59,7 @@ from typing import Dict, Iterable, List
         self.num_spans = num_spans
         self.proj_dim = task_params['d_hid']
         self.projs = []
+
         for i in range(num_spans):
             proj = self._make_cnn_layer(d_inp).cuda() \
                 if torch.cuda.is_available() else self._make_cnn_layer(d_inp)
@@ -86,13 +87,6 @@ from typing import Dict, Iterable, List
             'labels' : [batch_size, num_targets] of label indices
             'span1s' : [batch_size, num_targets, 2] of spans
             'span2s' : [batch_size, num_targets, 2] of spans
-<<<<<<< HEAD
-=======
-              .
-              .
-              .
-            'spanns' : [batch_size, num_targets, 2] of spans
->>>>>>> winograd
         'labels', 'span1s', and 'span2s' are padded with -1 along second
         (num_targets) dimension.
         Args:
@@ -146,6 +140,7 @@ from typing import Dict, Iterable, List
             out['loss'] = self.compute_loss(logits[span_mask],
                                             batch['labels'][span_mask],
                                             task)
+            task.update_subset_metrics(logits[span_mask], batch['labels'][span_mask], tagmask=batch["tagmask"])
 
         if predict:
             # Return preds as a list.
@@ -202,16 +197,19 @@ from typing import Dict, Iterable, List
 
         # F1Measure() expects [total_num_targets, n_classes, 2]
         # to compute binarized F1.
-        binary_scores = torch.stack([-1 * logits, logits], dim=2)
-        task.f1_scorer(binary_scores, labels)
-    
+        if self.num_spans == 2:
+            binary_scores = torch.stack([-1 * logits, logits], dim=2)
+            task.f1_scorer(binary_scores, labels)
+        else:
+            task.f1_scorer(logits, labels)
+            targets = (labels == 1).nonzero()[:,1]
+
         if self.loss_type == 'sigmoid':
             if self.num_spans == 2:
                 return F.binary_cross_entropy(torch.sigmoid(logits),
                                               labels.float())
             else:
-                targets = (labels == 1).nonzero()[:, 1]
-                return F.nll_loss(torch.sigmoid(logits), targets.long())
+                raise ValueError("Sigmoid only supported for binary output currently")
         elif self.loss_type == "softmax":
             targets = (labels == 1).nonzero()[:, 1]
             return F.cross_entropy(logits, targets.long())
@@ -430,6 +428,7 @@ class TwoSpanClassifierModule(nn.Module):
             return F.cross_entropy(logits, targets.long())
         else:
             raise ValueError("Unsupported loss type ." % self.loss_type)
+
 class ThreeSpanClassifierModule(TwoSpanClassifierModule):
     ''' 
     Extension of TwoSpan but where the input is 1 text and 3 spans.

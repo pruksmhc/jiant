@@ -1717,7 +1717,7 @@ class SpanTask(Task):
         return len(split_text)
 
     def _make_span_field(self, s, text_field, offset=1):
-        return SpanField(s[0] + offset, s[1] - 1 + offset, text_field)
+        return SpanField(s[0] + offset, s[1] +offset, text_field)
 
     def _pad_tokens(self, tokens):
         """Pad tokens according to the current tokenization style."""
@@ -1738,7 +1738,7 @@ class SpanTask(Task):
         d["idx"] = MetadataField(idx)
         d['input1'] = text_field
         for i in range(self.num_spans):
-            d["span"+str(i)+"s"] = ListField([self._make_span_field(t['span'+str(i)], text_field, 1)
+            d["span"+str(i+1)+"s"] = ListField([self._make_span_field(t['span'+str(i+1)], text_field, 1)
                                  for t in record['targets']])
 
         # Always use multilabel targets, so be sure each label is a list.
@@ -1777,12 +1777,15 @@ class SpanTask(Task):
         metrics['recall'] = recall
         metrics['f1'] = f1
         return metrics
+        
+    def update_subset_metrics(self, logits, labels, tagmask=None):
+        return
 
 @register_task('winograd-coreference', rel_path = 'winograd-coref')
 class WinogradCoreferenceTask(SpanTask):
     def __init__(self, path, single_sided=False, **kw):
         self._files_by_split = {'train': "train_final", 'val': "val_final",'test': "test_final"}
-        self.num_spans = 1
+        self.num_spans = 2
         super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=single_sided, **kw)
 
     def _stream_records(self, filename):
@@ -1842,13 +1845,12 @@ class UltrafinedCoreferenceTask(SpanTask):
 
         d = {}
         d["idx"] = MetadataField(idx)
-
         d['input1'] = text_field
         d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
                                  for t in record['targets']])
-
-        d['span2s'] = sentence_to_text_field(record['targets'][0]["span2"], indexers)
+        d['span2s'] = ListField([self._make_span_field([len(tokens) - type_length, len(tokens) - 1], text_field, 0)])
         # Always use multilabel targets, so be sure each label is a list.
+        
         labels = [utils.wrap_singleton_string(str(t['label']).lower())
                   for t in record['targets']]
         d['labels'] = ListField([MultiLabelField(label_set, label_namespace=self._label_namespace, skip_indexing=False) for label_set in labels])
@@ -1901,14 +1903,15 @@ class GapCoreferenceTask(SpanTask):
                  is_symmetric: bool = False,
                  domains=["FEMININE", "MASCULINE"],
                  single_sided: bool = False, **kw):
-        self._files_by_split = {'train': "gap-development.json", 'val': "gap-validation.json",'test': "gap-test.json"}
+        self._files_by_split = {'train': "gap-development.json", 'val': "gap-test.json",'test': "blind_test_gap.json"}
         # here, we want to split by domain, male or female, for subset evaluation.
         self.num_domains = len(domains)
+
         self.domains = domains
         self._domain_namespace = name + "_tags"
         label_file = "labels.txt"
-        num_spans = 3
-        super().__init__(path, max_seq_len, name, label_file, self._files_by_split, num_spans, is_symmetric, single_sided, **kw)
+        self.num_spans = 3
+        super().__init__(path, max_seq_len, name, label_file, self._files_by_split, self.num_spans, is_symmetric, single_sided, **kw)
 
         # Scorers
         self.f1_scorer = gap_scorer.GAPScorer()
@@ -1948,7 +1951,6 @@ class GapCoreferenceTask(SpanTask):
                                                  label_namespace=self._label_namespace,
                                                  skip_indexing=False)
                                  for label_set in labels])
-
         return Instance(d)
 
     def process_split(self, split, indexers):

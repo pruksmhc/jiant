@@ -96,8 +96,14 @@ def row_to_record(row: pd.Series) -> Dict:
     target['span1'] = pronoun_span
     target['span2'] = _get_span('A')
     target['span3'] = _get_span('B')
-    _validate_span(target['span2'], row['A'])
-    _validate_span(target['span3'], row['B'])
+    target["span1_text"] = row["Pronoun"]
+    target["span2_text"] = row["A"]
+    target["span3_text"] = row["B"]
+    try:
+        _validate_span(target['span2'], row['A'])
+        _validate_span(target['span3'], row['B'])
+    except:
+        import pdb; pdb.set_trace()
     A_label = str(int(row['A' + "-coref"]))
     B_label =  str(int(row['B' + "-coref"]))
     if A_label == '1':

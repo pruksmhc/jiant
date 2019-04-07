@@ -440,7 +440,7 @@ def build_task_specific_modules(
         odule = EdgeClassifierModule(task, d_sent, task_params)
         setattr(model, '%s_mdl' % task.name, module)
     elif isinstance(task, SpanTask):
-        num_spans = getattr(task, num_spans)
+        num_spans = getattr(task, "num_spans")
         module = SpanClassifierModule(task, d_sent, task_params, num_spans=num_spans)
         setattr(model, '%s_mdl' % task.name, module)
     elif isinstance(task, (RedditSeq2SeqTask, Wiki103Seq2SeqTask)):
