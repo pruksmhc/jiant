@@ -1,4 +1,3 @@
-#!/bin/bash
 
 # Quick-start: run this
 export JIANT_PROJECT_PREFIX="coreference_exp"

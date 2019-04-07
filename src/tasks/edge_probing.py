@@ -114,14 +114,14 @@ class EdgeProbingTask(Task):
     def _stream_records(self, filename):
         skip_ctr = 0
         total_ctr = 0
-        for record in utils.load_json_data(filename):
+        for records in utils.load_json_data(filename):
             total_ctr += 1
             # Skip records with empty targets.
             # TODO(ian): don't do this if generating negatives!
-            if not record.get('targets', None):
+            if not records.get('targets', None):
                 skip_ctr += 1
                 continue
-            yield record
+            yield records
         log.info("Read=%d, Skip=%d, Total=%d from %s",
                  total_ctr - skip_ctr, skip_ctr, total_ctr,
                  filename)
@@ -169,7 +169,7 @@ class EdgeProbingTask(Task):
         '''
         return len(split_text)
 
-    def _make_span_field(self, s, text_field, offset=1):
+    def _make_span_field(self, s, text_field, offset=0):
         return SpanField(s[0] + offset, s[1] - 1 + offset, text_field)
 
     def _pad_tokens(self, tokens):
@@ -191,7 +191,6 @@ class EdgeProbingTask(Task):
         d["idx"] = MetadataField(idx)
 
         d['input1'] = text_field
-
         d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
                                  for t in record['targets']])
         if not self.single_sided:
@@ -201,10 +200,7 @@ class EdgeProbingTask(Task):
         # Always use multilabel targets, so be sure each label is a list.
         labels = [utils.wrap_singleton_string(t['label'])
                   for t in record['targets']]
-        d['labels'] = ListField([MultiLabelField(label_set,
-                                                 label_namespace=self._label_namespace,
-                                                 skip_indexing=False)
-                                 for label_set in labels])
+        d['labels'] = ListField([MultiLabelField(label_set, label_namespace=self._label_namespace, skip_indexing=False) for label_set in labels])
         return Instance(d)
 
     def process_split(self, records, indexers) -> Iterable[Type[Instance]]:
@@ -234,7 +230,6 @@ class EdgeProbingTask(Task):
         metrics['recall'] = recall
         metrics['f1'] = f1
         return metrics
-        
 ##
 # Core probing tasks. as featured in the paper.
 ##

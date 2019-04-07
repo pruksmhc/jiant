@@ -1578,7 +1578,7 @@ class CCGTaggingTask(TaggingTask):
                            s1_idx=0, s2_idx=None, label_idx=1, label_fn=lambda t: t.split(' '))
         self.train_data_text = tr_data
         self.val_data_text = val_data
-        self.test_data_text = te_data
+        self.test_data_text = te_datapr
         log.info('\tFinished loading CCGTagging data.')
 
 ########
@@ -1778,6 +1778,28 @@ class SpanTask(Task):
         metrics['f1'] = f1
         return metrics
 
+@register_task('winograd-coreference', rel_path = 'winograd-coref')
+class WinogradCoreferenceTask(SpanTask):
+    def __init__(self, path, single_sided=False, **kw):
+        self._files_by_split = {'train': "train_final", 'val': "val_final",'test': "test_final"}
+        self.num_spans = 1
+        super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=single_sided, **kw)
+
+    def _stream_records(self, filename):
+        skip_ctr = 0
+        total_ctr = 0
+        for records in utils.load_json_data(filename):
+            total_ctr += 1
+            # Skip records with empty targets.
+            # TODO(ian): don't do this if generating negatives!
+            if not records.get('targets', None):
+                skip_ctr += 1
+                continue
+            yield records
+        log.info("Read=%d, Skip=%d, Total=%d from %s",
+                 total_ctr - skip_ctr, skip_ctr, total_ctr,
+                 filename)
+
 
 @register_task('ultrafine', rel_path = 'ultrafine')
 class UltrafinedCoreferenceTask(SpanTask):
@@ -1789,6 +1811,7 @@ class UltrafinedCoreferenceTask(SpanTask):
         self.micro_f1_scorer = F1Measure(positive_label=1) #micro average
         self.scorers = [self.macro_f1_scorer, self.micro_f1_scorer]
         self.domains = domain
+        self.num_spans = 2
         self.tag_list = domain
         num_domains = 3
         self.micro_subset_scorers = create_subset_scorers(num_domains, F1Measure, positive_label=1)

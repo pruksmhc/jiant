@@ -44,7 +44,7 @@ from .modules.modules import SentenceEncoder, BoWSentEncoder, \
     SingleClassifier, PairClassifier, CNNEncoder, \
     NullPhraseLayer
 from .modules.edge_probing import EdgeClassifierModule
-from .modules.span_modules import TwoSpanClassifierModule, ThreeSpanClassifierModule
+from .modules.span_modules import SpanClassifierModule
 from .modules.seq2seq_decoder import Seq2SeqDecoder
 
 
@@ -436,15 +436,12 @@ def build_task_specific_modules(
     elif isinstance(task, TaggingTask):
         hid2tag = build_tagger(task, d_sent, task.num_tags)
         setattr(model, '%s_mdl' % task.name, hid2tag)
-    elif task.name == "gap-coreference":
-        # TODO(Yada): Generalize this.
-        module = ThreeSpanClassifierModule(task, d_sent, task_params)
-        setattr(model, '%s_mdl' % task.name, module)
-    elif task.name == 'ultrafine':
-        module = TwoSpanClassifierModule(task, d_sent, task_params)
-        setattr(model, '%s_mdl' % task.name, module)
     elif isinstance(task, EdgeProbingTask):
-        module = EdgeClassifierModule(task, d_sent, task_params)
+        odule = EdgeClassifierModule(task, d_sent, task_params)
+        setattr(model, '%s_mdl' % task.name, module)
+    elif isinstance(task, SpanTask):
+        num_spans = getattr(task, num_spans)
+        module = SpanClassifierModule(task, d_sent, task_params, num_spans=num_spans)
         setattr(model, '%s_mdl' % task.name, module)
     elif isinstance(task, (RedditSeq2SeqTask, Wiki103Seq2SeqTask)):
         log.info("using {} attention".format(args.s2s['attention']))
