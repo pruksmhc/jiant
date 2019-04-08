@@ -1,6 +1,5 @@
 from .registry import register_task, REGISTRY  # global task registry
 '''Define the tasks and code for loading their data.
-
 - As much as possible, following the existing task hierarchy structure.
 - When inheriting, be sure to write and call load_data.
 - Set all text data as an attribute, task.sentences (List[List[str]])
@@ -35,7 +34,7 @@ from ..utils import utils
 from ..utils.utils import truncate
 from ..utils.data_loaders import load_tsv, process_sentence, load_diagnostic_tsv
 from ..utils.tokenizers import get_tokenizer
-from ..scorers import gap_scorer
+from ..scorers import gap_scorer, macro_f1 
 
 from typing import Iterable, Sequence, List, Dict, Any, Type
 
@@ -66,13 +65,11 @@ def process_single_pair_task_split(
     '''
     Convert a dataset of sentences into padded sequences of indices. Shared
     across several classes.
-
     Args:
         - split (list[list[str]]): list of inputs (possibly pair) and outputs
         - indexers ()
         - is_pair (Bool)
         - classification (Bool)
-
     Returns:
         - instances (Iterable[Instance]): an iterable of AllenNLP Instances with fields
     '''
@@ -111,7 +108,6 @@ def create_subset_scorers(count, scorer_type, **args_to_scorer):
     Create a list scorers of designated type for each "coarse__fine" tag.
     This function is only used by tasks that need evalute results on tags,
     and should be called after loading all the splits.
-
     Parameters:
         count: N_tag, number of different "coarse__fine" tags
         scorer_type: which scorer to use
@@ -128,7 +124,6 @@ def update_subset_scorers(scorer_list, estimations, labels, tagmask):
     Add the output and label of one minibatch to the subset scorer objects.
     This function is only used by tasks that need evalute results on tags,
     and should be called every minibatch when task.scorer are updated.
-
     Parameters:
         scorer_list: a list of N_tag scorer object
         estimations: a (bs, *) tensor, model estimation
@@ -149,7 +144,6 @@ def collect_subset_scores(scorer_list, metric_name, tag_list, reset=False):
     Get the scorer measures of each tag.
     This function is only used by tasks that need evalute results on tags,
     and should be called in get_metrics.
-
     Parameters:
         scorer_list: a list of N_tag scorer object
         metric_name: string, name prefix for this group
@@ -164,12 +158,10 @@ def collect_subset_scores(scorer_list, metric_name, tag_list, reset=False):
 
 class Task(object):
     '''Generic class for a task
-
     Methods and attributes:
         - load_data: load dataset from a path and create splits
         - truncate: truncate data to be at most some length
         - get_metrics:
-
     Outside the task:
         - process: pad and indexify data given a mapping
         - optimizer
@@ -219,14 +211,12 @@ class Task(object):
 
     def get_split_text(self, split: str):
         ''' Get split text, typically as list of columns.
-
         Split should be one of 'train', 'val', or 'test'.
         '''
         return getattr(self, '%s_data_text' % split)
 
     def get_num_examples(self, split_text):
         ''' Return number of examples in the result of get_split_text.
-
         Subclass can override this if data is not stored in column format.
         '''
         return len(split_text[0])
@@ -1216,7 +1206,6 @@ class DisSentTask(PairClassificationTask):
 
     def get_split_text(self, split: str):
         ''' Get split text as iterable of records.
-
         Split should be one of 'train', 'val', or 'test'.
         '''
         return self.load_data(self.files_by_split[split])
@@ -1578,7 +1567,7 @@ class CCGTaggingTask(TaggingTask):
                            s1_idx=0, s2_idx=None, label_idx=1, label_fn=lambda t: t.split(' '))
         self.train_data_text = tr_data
         self.val_data_text = val_data
-        self.test_data_text = te_data
+        self.test_data_text = te_datapr
         log.info('\tFinished loading CCGTagging data.')
 
 ########
@@ -1736,11 +1725,9 @@ class SpanTask(Task):
 
         d = {}
         d["idx"] = MetadataField(idx)
-
         d['input1'] = text_field
-
         for i in range(self.num_spans):
-            d["span"+str(i)+"s"] = ListField([self._make_span_field(t['span'+str(i)], text_field, 1)
+            d["span"+str(i+1)+"s"] = ListField([self._make_span_field(t['span'+str(i+1)], text_field, 1)
                                  for t in record['targets']])
 
         # Always use multilabel targets, so be sure each label is a list.
@@ -1779,6 +1766,125 @@ class SpanTask(Task):
         metrics['recall'] = recall
         metrics['f1'] = f1
         return metrics
+        
+    def update_subset_metrics(self, logits, labels, tagmask=None):
+        return
+
+@register_task('winograd-coreference', rel_path = 'winograd-coref')
+class WinogradCoreferenceTask(SpanTask):
+    def __init__(self, path, single_sided=False, **kw):
+        self._files_by_split = {'train': "train_final", 'val': "val_final",'test': "test_final"}
+        self.num_spans = 2
+        super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=single_sided, **kw)
+
+    def _stream_records(self, filename):
+        skip_ctr = 0
+        total_ctr = 0
+        for records in utils.load_json_data(filename):
+            total_ctr += 1
+            # Skip records with empty targets.
+            # TODO(ian): don't do this if generating negatives!
+            if not records.get('targets', None):
+                skip_ctr += 1
+                continue
+            yield records
+        log.info("Read=%d, Skip=%d, Total=%d from %s",
+                 total_ctr - skip_ctr, skip_ctr, total_ctr,
+                 filename)
+
+
+@register_task('ultrafine', rel_path = 'ultrafine')
+class UltrafinedCoreferenceTask(SpanTask):
+    def __init__(self, path, domain=["general", "fine", "finer"], single_sided=False, **kw):
+        self._domain_namespace = kw["name"] + "_tags"
+        self._files_by_split = {'train': "final_parsed_train.json", 'val': 'final_parsed_val.json', "test": "final_parsed_test.json"}
+        # current new one. 
+        self.macro_f1_scorer = macro_f1.MacroF1()
+        self.micro_f1_scorer = F1Measure(positive_label=1) #micro average
+        self.scorers = [self.macro_f1_scorer, self.micro_f1_scorer]
+        self.domains = domain
+        self.num_spans = 2
+        self.tag_list = domain
+        num_domains = 3
+        self.micro_subset_scorers = create_subset_scorers(num_domains, F1Measure, positive_label=1)
+        self.macro_subset_scorers = create_subset_scorers(num_domains, macro_f1.MacroF1)
+        super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=True, **kw)
+
+    def _make_span_field(self, s, text_field, offset=1):
+        return SpanField(s[0] + offset, s[1] + offset, text_field)
+
+    def make_instance(self, record, idx, indexers) -> Type[Instance]:
+        """Convert a single record to an AllenNLP Instance."""
+        tokens = record['text'].split()  # already space-tokenized by Moses
+        tokens = self._pad_tokens(tokens)
+        type_label_tokens = record["targets"][0]['span2']
+        type_length = len(type_label_tokens)
+    
+        offset = len(tokens) + type_length - 512
+        # if the length of tokens and the appended type is too much.
+        if len(tokens) + type_length > 512:
+          span_indices = record["targets"][0]['span1']
+          # make sure you strip the part of the text that doesn't contain the 
+          # span
+          if span_indices[0] < len(tokens) - offset:
+            # remove the right end of the text
+            tokens = tokens[:len(tokens) - offset - 1] + [tokens[-1]]
+          else:
+            # remove left end
+            tokens = tokens[0] + tokens[len(tokens) - offset + 1:]
+        tokens.extend(type_label_tokens)# append to become [CLS] text [SEP] label
+        text_field = sentence_to_text_field(tokens, indexers) # add to the vocabulary
+
+        d = {}
+        d["idx"] = MetadataField(idx)
+        d['input1'] = text_field
+        d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
+                                 for t in record['targets']])
+        d['span2s'] = ListField([self._make_span_field([len(tokens) - type_length, len(tokens) - 1], text_field, 0)])
+        # Always use multilabel targets, so be sure each label is a list.
+        
+        labels = [utils.wrap_singleton_string(str(t['label']).lower())
+                  for t in record['targets']]
+        d['labels'] = ListField([MultiLabelField(label_set, label_namespace=self._label_namespace, skip_indexing=False) for label_set in labels])
+        return Instance(d)
+
+    def process_split(self, records, indexers) -> Iterable[Type[Instance]]:
+        ''' Process split text into a list of AllenNLP Instances. '''
+        def _map_fn(r, idx): 
+          instance = self.make_instance(r, idx, indexers)
+          tag_field = MultiLabelField([r["targets"][0]["type_category"]], label_namespace=self._domain_namespace)
+          instance.add_field("tagmask", field=tag_field)
+          return instance
+        return map(_map_fn, records, itertools.count())
+
+    def update_subset_metrics(self, logits, labels, tagmask=None):
+        logits, labels = logits.detach(), labels.detach()
+        binary_scores = torch.stack([-1 * logits, logits], dim=2)
+        if tagmask is not None:
+             update_subset_scorers(self.micro_subset_scorers, binary_scores, labels, tagmask)
+             update_subset_scorers(self.macro_subset_scorers, binary_scores, labels, tagmask)
+
+    def get_sentences(self) -> Iterable[Sequence[str]]:
+        ''' Yield sentences, used to compute vocabulary. '''
+        for split, iter in self._iters_by_split.items():
+            # Don't use test set for vocab building.
+            if split.startswith("test"):
+                continue
+            for record in iter:
+                yield record["text"].split()
+                yield record["targets"][0]['span2']
+
+    def get_metrics(self, reset=False):
+        '''Get metrics specific to the task'''
+        micro_f1 = self.micro_f1_scorer.get_metric(reset)[2]
+        macro_f1 = self.macro_f1_scorer.get_metric(reset)
+        collected_metrics = {"overall_micro_f1": micro_f1, "f1": macro_f1, "overall_macro_f1": macro_f1}
+        collected_metrics.update(collect_subset_scores(self.micro_subset_scorers, "microF1", self.domains, reset))
+        collected_metrics.update(collect_subset_scores(self.macro_subset_scorers, "macroF1", self.domains, reset))
+        for v,k in collected_metrics.items():
+          if v.startswith("micro"):
+            collected_metrics[v] = collected_metrics[v][2]
+        return collected_metrics
 
 @register_task('gap-coreference', rel_path = 'gap-coreference')
 class GapCoreferenceTask(SpanTask):
@@ -1792,11 +1898,12 @@ class GapCoreferenceTask(SpanTask):
         self._files_by_split = {'train': "gap-development.json", 'val': "gap-test.json",'test': "blind_test_gap.json"}
         # here, we want to split by domain, male or female, for subset evaluation.
         self.num_domains = len(domains)
+
         self.domains = domains
         self._domain_namespace = name + "_tags"
         label_file = "labels.txt"
-        num_spans = 3
-        super().__init__(path, max_seq_len, name, label_file, self._files_by_split, num_spans, is_symmetric, single_sided, **kw)
+        self.num_spans = 3
+        super().__init__(path, max_seq_len, name, label_file, self._files_by_split, self.num_spans, is_symmetric, single_sided, **kw)
 
         # Scorers
         self.f1_scorer = gap_scorer.GAPScorer()
@@ -1836,7 +1943,6 @@ class GapCoreferenceTask(SpanTask):
                                                  label_namespace=self._label_namespace,
                                                  skip_indexing=False)
                                  for label_set in labels])
-
         return Instance(d)
 
     def process_split(self, split, indexers):
@@ -1863,4 +1969,3 @@ class GapCoreferenceTask(SpanTask):
         if collected_metrics["f1_FEMININE"] != 0.0:
             collected_metrics.update({"bias": collected_metrics["f1_MASCULINE"] / collected_metrics["f1_FEMININE"]})
         return collected_metrics
-
