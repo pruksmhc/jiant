@@ -154,6 +154,7 @@ class TwoSpanClassifierModule(nn.Module):
             out['loss'] = self.compute_loss(logits[span_mask],
                                             batch['labels'][span_mask],
                                             task)
+            task.update_subset_metrics(logits[span_mask], batch["labels"][span_mask], tagmask=batch['tagmask'])t
 
         if predict:
             # Return preds as a list.
@@ -205,20 +206,21 @@ class TwoSpanClassifierModule(nn.Module):
         Returns:
             loss: scalar Tensor
         """
-        binary_preds = logits.ge(0).long()  # {0,1}
-
+        pred = torch.nn.Softmax(dim=1)(logits)
+        binary_preds = torch.argmax(pred, dim=1)
         # Matthews coefficient and accuracy computed on {0,1} labels.
-        task.mcc_scorer(binary_preds, labels.long())
-        task.acc_scorer(binary_preds, labels.long())
-
-        # F1Measure() expects [total_num_targets, n_classes, 2]
-        # to compute binarized F1.
-        binary_scores = torch.stack([-1 * logits, logits], dim=2)
-        task.f1_scorer(binary_scores, labels)
-
+        task.acc_scorer(binary_preds.long(), labels.long())
+        task.f1_scorer(logits, labels)
+        targets = (labels == 1).nonzero()[:,1]
         if self.loss_type == 'sigmoid':
-            return F.binary_cross_entropy(torch.sigmoid(logits),
-                                          labels.float())
+            if self.num_spans == 2:
+                return F.binary_cross_entropy(torch.sigmoid(logits),
+                                              labels.float())
+            else:
+                raise ValueError("Sigmoid only supported for binary output currently")
+        elif self.loss_type == "softmax":
+            targets = (labels == 1).nonzero()[:, 1]
+            return F.cross_entropy(logits, targets.long())
         else:
             raise ValueError("Unsupported loss type ." % self.loss_type)
 
