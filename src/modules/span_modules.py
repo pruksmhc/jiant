@@ -188,7 +188,9 @@ class TwoSpanClassifierModule(nn.Module):
         if self.loss_type == 'sigmoid':
             return torch.sigmoid(logits)
         elif self.loss_type == "softmax":
-            return F.softmax(logits)
+            pred = torch.nn.Softmax(dim=1)(logits)
+            pred = torch.argmax(pred, dim=1)
+            return preds
         else:
             raise ValueError("Unsupported loss type" % self.loss_type)
 
