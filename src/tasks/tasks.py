@@ -1789,7 +1789,7 @@ class GapCoreferenceTask(SpanTask):
                  is_symmetric: bool = False,
                  domains=["FEMININE", "MASCULINE"],
                  single_sided: bool = False, **kw):
-        self._files_by_split = {'train': "gap-development.json", 'val': "gap-test.json",'test': "blind_test_gap.json"}
+        self._files_by_split = {'train': "gap-development.json", 'val': "gap-validation.json",'test': "blind_test_gap.json"}
         # here, we want to split by domain, male or female, for subset evaluation.
         self.num_domains = len(domains)
         self.domains = domains
