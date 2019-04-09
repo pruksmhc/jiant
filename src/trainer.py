@@ -190,8 +190,6 @@ class SamplingMultiTaskTrainer:
         self._metric_infos = None
 
         self._log_interval = 10  # seconds
-        if torch.get_cuda_count() > 1:
-            self._model = nn.DataParallel(self._model)
         if self._cuda_device >= 0:
             self._model = self._model.cuda(self._cuda_device)
 
@@ -493,7 +491,6 @@ class SamplingMultiTaskTrainer:
 
         offset = 0
         all_tr_metrics = {}
-        accumulation_steps = 16 # only step every 16 steps. 
         log.info("Beginning training. Stopping metric: %s", stop_metric)
         while not should_stop:
             self._model.train()
@@ -509,9 +506,10 @@ class SamplingMultiTaskTrainer:
             total_batches_trained = task_info['total_batches_trained']
             n_batches_since_val = task_info['n_batches_since_val']
             tr_loss = task_info['loss']
-            for i, batch in enumerate(itertools.islice(tr_generator, n_batches_per_pass)):
+            for batch in itertools.islice(tr_generator, n_batches_per_pass):
                 n_batches_since_val += 1
                 total_batches_trained += 1
+                optimizer.zero_grad()
                 output_dict = self._forward(
                     batch, task=task, for_training=True)
                 assert_for_log(
@@ -528,9 +526,7 @@ class SamplingMultiTaskTrainer:
                 # Gradient regularization and application
                 if self._grad_norm:
                     clip_grad_norm_(self._model.parameters(), self._grad_norm)
-                if (i+1) % accumulation_steps == 0:  
-                    optimizer.step()
-                    optimizer.zero_grad()
+                optimizer.step()
                 n_pass += 1  # update per batch
 
                 # step scheduler if it's not ReduceLROnPlateau
