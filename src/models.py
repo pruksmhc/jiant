@@ -44,7 +44,7 @@ from .modules.modules import SentenceEncoder, BoWSentEncoder, \
     SingleClassifier, PairClassifier, CNNEncoder, \
     NullPhraseLayer
 from .modules.edge_probing import EdgeClassifierModule
-from .modules.span_modules import ThreeSpanClassifierModule
+from .modules.span_modules import TwoSpanClassifierModule, ThreeSpanClassifierModule
 from .modules.seq2seq_decoder import Seq2SeqDecoder
 
 
@@ -439,6 +439,9 @@ def build_task_specific_modules(
     elif task.name == "gap-coreference":
         # TODO(Yada): Generalize this.
         module = ThreeSpanClassifierModule(task, d_sent, task_params)
+        setattr(model, '%s_mdl' % task.name, module)
+    elif task.name == 'ultrafine':
+        module = TwoSpanClassifierModule(task, d_sent, task_params)
         setattr(model, '%s_mdl' % task.name, module)
     elif isinstance(task, EdgeProbingTask):
         module = EdgeClassifierModule(task, d_sent, task_params)

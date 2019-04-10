@@ -3,13 +3,6 @@ from allennlp.training.metrics import CategoricalAccuracy, \
     BooleanAccuracy, F1Measure, Average
 
 
-my = F1Measure(positive_label =1)
-logits = [[0, 1], [0,1], [0, 1], [1,0]]
-labels = [1, 1, 0, 0]
-logits = torch.LongTensor(logits)
-labels = torch.LongTensor(labels)
-binary_scores = torch.stack([-1 * logits, logits], dim=2)
-my(logits, labels)
 # abels_in_int_format = torch.max(labels, dim=1)[1] -you have to do this for microf1 btw
 # to mae it correct 
 
@@ -47,5 +40,31 @@ class MacroF1():
     denom[denom == 0.] = 1
     f_score = (1 + self.beta) * precision * recall / denom
     f_score = np.average(f_score)
-    return torch.FloatTensor(f_score)
+    return torch.from_numpy(np.array(f_score))
  
+"""
+logits = torch.Tensor([[0.01, 0.234],[0.01, 0.234], [0.01, 0.234], [0.8, 0.2]])
+labels = torch.Tensor([1, 1, 0, 0])
+pred = torch.nn.Softmax(dim=1)(logits)
+pred = torch.argmax(pred, dim=1)
+def one_hot_v(batch, depth=2):
+    ones = torch.sparse.torch.eye(depth)
+    return ones.index_select(0,batch)
+one_hot_logits = one_hot_v(pred)
+micro_f1_scorer = F1Measure(positive_label=1)
+macro_f1_scorer = MacroF1()
+micro_f1_scorer(one_hot_v(pred).long(), labels.long())
+macro_f1_scorer(one_hot_logits.long(), labels.long())
+print("our version of micro f1")
+print(micro_f1_scorer.get_metric())
+print("our version of macro f1")
+print(macro_f1_scorer.get_metric())
+y_pred = [1, 1, 1, 0]
+y_true = [1, 1, 0, 0]
+import sklearn 
+from sklearn.metrics import f1_score
+print("sklearn version of micro f1")
+print(f1_score(y_true, y_pred))
+print("sklearn version of macro f1")
+print(f1_score(y_true, y_pred, average='macro'))
+"""

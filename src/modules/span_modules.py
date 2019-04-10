@@ -12,7 +12,7 @@ from .import modules
 from allennlp.modules.span_extractors import \
     EndpointSpanExtractor, SelfAttentiveSpanExtractor
 from allennlp.nn.util import move_to_device, device_mapping
-
+import logging as log
 from typing import Dict, Iterable, List
 
 #TODO(Yada): Generalize to N-Span module.
@@ -154,7 +154,7 @@ class TwoSpanClassifierModule(nn.Module):
             out['loss'] = self.compute_loss(logits[span_mask],
                                             batch['labels'][span_mask],
                                             task)
-            task.update_subset_metrics(logits[span_mask], batch["labels"][span_mask], tagmask=batch['tagmask'])t
+            task.update_subset_metrics(logits[span_mask], batch["labels"][span_mask], tagmask=batch['tagmask'])
 
         if predict:
             # Return preds as a list.
@@ -191,7 +191,7 @@ class TwoSpanClassifierModule(nn.Module):
         elif self.loss_type == "softmax":
             pred = torch.nn.Softmax(dim=1)(logits)
             pred = torch.argmax(pred, dim=1)
-            return preds
+            return pred
         else:
             raise ValueError("Unsupported loss type" % self.loss_type)
 
@@ -206,12 +206,22 @@ class TwoSpanClassifierModule(nn.Module):
         Returns:
             loss: scalar Tensor
         """
-        pred = torch.nn.Softmax(dim=1)(logits)
-        binary_preds = torch.argmax(pred, dim=1)
+        binary_preds = logits.ge(0).long()
+
         # Matthews coefficient and accuracy computed on {0,1} labels.
-        task.acc_scorer(binary_preds.long(), labels.long())
-        task.f1_scorer(logits, labels)
-        targets = (labels == 1).nonzero()[:,1]
+        task.acc_scorer(binary_preds, labels.long())
+        if task.name == 'ultrafine':
+            pred = torch.nn.Softmax(dim=1)(logits)
+            pred = torch.argmax(pred, dim=1)
+            def one_hot_v(batch, depth=2):
+                ones = torch.sparse.torch.eye(depth)
+                return ones.index_select(0,batch)
+            # one_hot_vector of predicted label, [bs x 2]
+            # this is tested in macro_F1.py
+            one_hot_logits = one_hot_v(pred)
+            task.micro_f1_scorer(one_hot_logits.long(), labels.long())
+            task.macro_f1_scorer(one_hot_logits.long(), labels.long())
+        # and now, we try the macro_f1_scorer. 
         if self.loss_type == 'sigmoid':
             if self.num_spans == 2:
                 return F.binary_cross_entropy(torch.sigmoid(logits),
