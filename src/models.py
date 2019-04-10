@@ -441,7 +441,7 @@ def build_task_specific_modules(
         module = ThreeSpanClassifierModule(task, d_sent, task_params)
         setattr(model, '%s_mdl' % task.name, module)
     elif task.name == 'ultrafine':
-        module = TwoSpanClassifierModule(task, d_sent, task_params)
+        module = TwoSpanClassifierModule(task, d_sent, task_params, args.cuda, task.loss_weights)
         setattr(model, '%s_mdl' % task.name, module)
     elif isinstance(task, EdgeProbingTask):
         module = EdgeClassifierModule(task, d_sent, task_params)

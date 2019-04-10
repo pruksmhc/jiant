@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 
@@ -46,7 +47,7 @@ class TwoSpanClassifierModule(nn.Module):
                          stride=1, padding=padding, dilation=1,
                          groups=1, bias=True)
 
-    def __init__(self, task, d_inp: int, task_params):
+    def __init__(self, task, d_inp: int, task_params, cuda:int, loss_weights: torch.Tensor):
         super(TwoSpanClassifierModule, self).__init__()
         # Set config options needed for forward pass.
         self.loss_type = task_params['cls_loss_fn']
@@ -54,6 +55,8 @@ class TwoSpanClassifierModule(nn.Module):
         self.cnn_context = task_params.get('cnn_context', 0)
         self.is_symmetric = task.is_symmetric
         self.single_sided = task.single_sided
+        self.cuda_device = cuda
+        self.loss_weights = loss_weights
 
         self.proj_dim = task_params['d_hid']
         # Separate projection for span1, span2.
@@ -153,8 +156,9 @@ class TwoSpanClassifierModule(nn.Module):
             # Flatten to [total_num_targets, ...] first.
             out['loss'] = self.compute_loss(logits[span_mask],
                                             batch['labels'][span_mask],
-                                            task)
-            task.update_subset_metrics(logits[span_mask], batch["labels"][span_mask], tagmask=batch['tagmask'])
+                                            task, self.cuda_device, 
+                                            self.loss_weights)
+            task.update_metrics(logits[span_mask], batch['labels'][span_mask], tagmask=batch['tagmask'])
 
         if predict:
             # Return preds as a list.
@@ -177,7 +181,7 @@ class TwoSpanClassifierModule(nn.Module):
         masks = masks.detach().cpu()
         for pred, mask in zip(torch.unbind(preds, dim=0),
                               torch.unbind(masks, dim=0)):
-            yield pred[mask].numpy()  # only non-masked predictions
+            yield pred.numpy()  # only non-masked predictions
 
     def get_predictions(self, logits: torch.Tensor):
         """Return class probabilities, same shape as logits.
@@ -196,7 +200,7 @@ class TwoSpanClassifierModule(nn.Module):
             raise ValueError("Unsupported loss type" % self.loss_type)
 
     def compute_loss(self, logits: torch.Tensor,
-                     labels: torch.Tensor, task: Task):
+                     labels: torch.Tensor, task: Task, cuda_device: int, loss_weights: torch.Tensor):
         """ Compute loss & eval metrics.
         Expect logits and labels to be already "selected" for good targets,
         i.e. this function does not do any masking internally.
@@ -206,22 +210,8 @@ class TwoSpanClassifierModule(nn.Module):
         Returns:
             loss: scalar Tensor
         """
-        binary_preds = logits.ge(0).long()
-
-        # Matthews coefficient and accuracy computed on {0,1} labels.
-        task.acc_scorer(binary_preds, labels.long())
-        if task.name == 'ultrafine':
-            pred = torch.nn.Softmax(dim=1)(logits)
-            pred = torch.argmax(pred, dim=1)
-            def one_hot_v(batch, depth=2):
-                ones = torch.sparse.torch.eye(depth)
-                return ones.index_select(0,batch)
-            # one_hot_vector of predicted label, [bs x 2]
-            # this is tested in macro_F1.py
-            one_hot_logits = one_hot_v(pred)
-            task.micro_f1_scorer(one_hot_logits.long(), labels.long())
-            task.macro_f1_scorer(one_hot_logits.long(), labels.long())
         # and now, we try the macro_f1_scorer. 
+        # weighted cross etnropy
         if self.loss_type == 'sigmoid':
             if self.num_spans == 2:
                 return F.binary_cross_entropy(torch.sigmoid(logits),
@@ -230,7 +220,8 @@ class TwoSpanClassifierModule(nn.Module):
                 raise ValueError("Sigmoid only supported for binary output currently")
         elif self.loss_type == "softmax":
             targets = (labels == 1).nonzero()[:, 1]
-            return F.cross_entropy(logits, targets.long())
+            loss = nn.CrossEntropyLoss(weight=loss_weights)
+            return loss(logits, targets.long())
         else:
             raise ValueError("Unsupported loss type ." % self.loss_type)
 
@@ -240,7 +231,7 @@ class ThreeSpanClassifierModule(TwoSpanClassifierModule):
     '''
 
     def __init__(self, task, d_inp: int, task_params):
-        super().__init__(task, d_inp, task_params)
+        super().__init__(task, d_inp, task_params, 1, torch.FloatTensor([]).cuda())
         # Set config options needed for forward pass.
         self.loss_type = task_params['cls_loss_fn']
         self.span_pooling = task_params['cls_span_pooling']

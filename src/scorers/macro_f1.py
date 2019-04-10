@@ -1,7 +1,7 @@
 import torch
 from allennlp.training.metrics import CategoricalAccuracy, \
     BooleanAccuracy, F1Measure, Average
-
+import logging as log
 
 # abels_in_int_format = torch.max(labels, dim=1)[1] -you have to do this for microf1 btw
 # to mae it correct 
@@ -22,7 +22,7 @@ class MacroF1():
     self.true_neg_count += len((labels == 0).nonzero().squeeze(1))
     self.pred_pos_count += len(logits_ints.nonzero().squeeze(1))
     self.pred_neg_count += len((logits_ints == 0).nonzero().squeeze(1))
-    pos_indices = labels.nonzero().squeeze(1)
+    pos_indices = labels.nonzero().squeeze(1).cuda()
     pos_preds = logits_ints[pos_indices]
     self.correct_pos_predictions_count += len((pos_preds == labels[pos_indices]).nonzero())
     neg_indices = (labels== 0).nonzero().squeeze(1)

@@ -1793,12 +1793,14 @@ class UltrafinedCoreferenceTask(SpanTask):
         self.num_spans = 2
         self.tag_list = domain
         num_domains = 3
+        self.loss_weights = torch.FloatTensor([1, 83/17]).cuda()
         self.micro_subset_scorers = create_subset_scorers(num_domains, F1Measure, positive_label=1)
         self.macro_subset_scorers = create_subset_scorers(num_domains, macro_f1.MacroF1)
         super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=True, **kw)
 
     def _make_span_field(self, s, text_field, offset=1):
         return SpanField(s[0] + offset, s[1] + offset, text_field)
+
 
     def make_instance(self, record, idx, indexers) -> Type[Instance]:
         """Convert a single record to an AllenNLP Instance."""
@@ -1844,12 +1846,30 @@ class UltrafinedCoreferenceTask(SpanTask):
           return instance
         return map(_map_fn, records, itertools.count())
 
-    def update_subset_metrics(self, logits, labels, tagmask=None):
+    def update_metrics(self, logits, labels, tagmask=None):
         logits, labels = logits.detach(), labels.detach()
-        binary_scores = torch.stack([-1 * logits, logits], dim=2)
+        binary_preds = logits.ge(0).long()
+
+        # Matthews coefficient and accuracy computed on {0,1} labels.
+        self.acc_scorer(binary_preds, labels.long())
+        pred = torch.nn.Softmax(dim=1)(logits)
+        pred = torch.argmax(pred, dim=1)
+        def one_hot_v(batch, depth=2):
+            ones = torch.sparse.torch.eye(depth).cuda()
+            return ones.index_select(0,batch)
+        # one_hot_vector of predicted label, [bs x 2]
+        # this is tested in macro_F1.py
+        one_hot_logits = one_hot_v(pred)
+        labels =  torch.max(labels, dim=1)[1]
+        log.info("THE LOGITS GIVEN")
+        log.info(one_hot_logits)
+        log.info("THE LABELS")
+        log.info(labels)
+        self.micro_f1_scorer(one_hot_logits.long(), labels.long())
+        self.macro_f1_scorer(one_hot_logits.long(), labels.long())
         if tagmask is not None:
-             update_subset_scorers(self.micro_subset_scorers, binary_scores, labels, tagmask)
-             update_subset_scorers(self.macro_subset_scorers, binary_scores, labels, tagmask)
+             update_subset_scorers(self.micro_subset_scorers, one_hot_logits.long(), labels.long(), tagmask)
+             update_subset_scorers(self.macro_subset_scorers,one_hot_logits.long(), labels.long(), tagmask)
 
     def get_sentences(self) -> Iterable[Sequence[str]]:
         ''' Yield sentences, used to compute vocabulary. '''
@@ -1865,7 +1885,7 @@ class UltrafinedCoreferenceTask(SpanTask):
         '''Get metrics specific to the task'''
         micro_f1 = self.micro_f1_scorer.get_metric(reset)[2]
         macro_f1 = self.macro_f1_scorer.get_metric(reset)
-        collected_metrics = {"overall_micro_f1": micro_f1, "f1": macro_f1, "overall_macro_f1": macro_f1}
+        collected_metrics = {"overall_micro_f1": micro_f1, "accuracy": self.acc_scorer.get_metric(reset), "f1": macro_f1, "overall_macro_f1": macro_f1}
         collected_metrics.update(collect_subset_scores(self.micro_subset_scorers, "microF1", self.domains, reset))
         collected_metrics.update(collect_subset_scores(self.macro_subset_scorers, "macroF1", self.domains, reset))
         for v,k in collected_metrics.items():
