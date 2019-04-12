@@ -47,7 +47,7 @@ class TwoSpanClassifierModule(nn.Module):
                          stride=1, padding=padding, dilation=1,
                          groups=1, bias=True)
 
-    def __init__(self, task, d_inp: int, task_params, cuda:int, loss_weights: torch.Tensor):
+    def __init__(self, task, d_inp: int, task_params, cuda:int, loss_weights: torch.Tensor = None):
         super(TwoSpanClassifierModule, self).__init__()
         # Set config options needed for forward pass.
         self.loss_type = task_params['cls_loss_fn']
@@ -97,7 +97,8 @@ class TwoSpanClassifierModule(nn.Module):
                 sent_embs: torch.Tensor,
                 sent_mask: torch.Tensor,
                 task: Task,
-                predict: bool) -> Dict:
+                predict: bool, 
+                print=False) -> Dict:
         """ Run forward pass.
         Expects batch to have the following entries:
             'batch1' : [batch_size, max_len, ??]
@@ -148,7 +149,9 @@ class TwoSpanClassifierModule(nn.Module):
         # [batch_size, num_targets, n_classes]
         logits = self.classifier(span_emb)
         out['logits'] = logits
-
+        if print:
+            log.info(logits)
+            log.info(batch["labels"])
         # Compute loss if requested.
         if 'labels' in batch:
             # Labels is [batch_size, num_targets, n_classes],
@@ -158,7 +161,8 @@ class TwoSpanClassifierModule(nn.Module):
                                             batch['labels'][span_mask],
                                             task, self.cuda_device, 
                                             self.loss_weights)
-            task.update_metrics(logits[span_mask], batch['labels'][span_mask], tagmask=batch['tagmask'])
+            tagmask = batch.get('tagmask', None)
+            task.update_metrics(logits[span_mask], batch['labels'][span_mask], tagmask=tagmask)
 
         if predict:
             # Return preds as a list.
@@ -193,6 +197,7 @@ class TwoSpanClassifierModule(nn.Module):
         if self.loss_type == 'sigmoid':
             return torch.sigmoid(logits)
         elif self.loss_type == "softmax":
+            logits = logits.squeeze(dim=1)
             pred = torch.nn.Softmax(dim=1)(logits)
             pred = torch.argmax(pred, dim=1)
             return pred
@@ -213,14 +218,11 @@ class TwoSpanClassifierModule(nn.Module):
         # and now, we try the macro_f1_scorer. 
         # weighted cross etnropy
         if self.loss_type == 'sigmoid':
-            if self.num_spans == 2:
-                return F.binary_cross_entropy(torch.sigmoid(logits),
-                                              labels.float())
-            else:
-                raise ValueError("Sigmoid only supported for binary output currently")
+            return F.binary_cross_entropy(torch.sigmoid(logits),
+                                          labels.float())
         elif self.loss_type == "softmax":
             targets = (labels == 1).nonzero()[:, 1]
-            loss = nn.CrossEntropyLoss(weight=loss_weights)
+            loss = nn.CrossEntropyLoss()
             return loss(logits, targets.long())
         else:
             raise ValueError("Unsupported loss type ." % self.loss_type)
@@ -306,7 +308,6 @@ class ThreeSpanClassifierModule(TwoSpanClassifierModule):
 
         batch_size = sent_embs.shape[0]
         out['n_inputs'] = batch_size
-
         # Apply projection CNN layer for each span.
         sent_embs_t = sent_embs.transpose(1, 2)  # needed for CNN layer
         se_proj1 = self.projs[1](sent_embs_t).transpose(2, 1).contiguous()

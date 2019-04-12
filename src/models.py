@@ -440,8 +440,9 @@ def build_task_specific_modules(
         # TODO(Yada): Generalize this.
         module = ThreeSpanClassifierModule(task, d_sent, task_params)
         setattr(model, '%s_mdl' % task.name, module)
-    elif task.name == 'ultrafine':
-        module = TwoSpanClassifierModule(task, d_sent, task_params, args.cuda, task.loss_weights)
+    elif task.name == 'ultrafine' or task.name == 'winograd-coreference':
+        loss_weights = getattr(task, "loss_weights", None)
+        module = TwoSpanClassifierModule(task, d_sent, task_params, args.cuda, loss_weights)
         setattr(model, '%s_mdl' % task.name, module)
     elif isinstance(task, EdgeProbingTask):
         module = EdgeClassifierModule(task, d_sent, task_params)
@@ -633,7 +634,7 @@ class MultiTaskModel(nn.Module):
         self.elmo = args.elmo and not args.elmo_chars_only
         self.sep_embs_for_skip = args.sep_embs_for_skip
 
-    def forward(self, task, batch, predict=False):
+    def forward(self, task, batch, predict=False, print_logits=False):
         '''
         Pass inputs to correct forward pass
         Args:

@@ -1655,6 +1655,7 @@ class SpanTask(Task):
         self.mcc_scorer = FastMatthews()
         self.acc_scorer = BooleanAccuracy()  # binary accuracy
         self.f1_scorer = F1Measure(positive_label=1)  # binary F1 overall
+
         self.val_metric = "%s_f1" % self.name  # TODO: switch to MCC?
         self.val_metric_decreases = False
 
@@ -1739,7 +1740,7 @@ class SpanTask(Task):
 
         d['input1'] = text_field
 
-        for i in range(self.num_spans):
+        for i in range(1, self.num_spans + 1):
             d["span"+str(i)+"s"] = ListField([self._make_span_field(t['span'+str(i)], text_field, 1)
                                  for t in record['targets']])
 
@@ -1780,6 +1781,55 @@ class SpanTask(Task):
         metrics['f1'] = f1
         return metrics
 
+@register_task('winograd-coreference', rel_path = 'winograd-coref')
+class WinogradCoreferenceTask(SpanTask):
+    def __init__(self, path, single_sided=False, **kw):
+        self._files_by_split = {'train': "train_after_redistribution", 'val': "val_same_distribution_test",'test': "test_final"}
+        super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=single_sided, **kw)
+        self.loss_weights = None
+
+    def update_metrics(self, logits, labels, tagmask=None):
+        logits, labels = logits.detach(), labels.detach()
+        binary_preds = logits.ge(0).long()
+
+        # Matthews coefficient and accuracy computed on {0,1} labels.
+        self.acc_scorer(binary_preds, labels.long())
+        pred = torch.nn.Softmax(dim=1)(logits)
+        pred = torch.argmax(pred, dim=1)
+        def one_hot_v(batch, depth=2):
+            ones = torch.sparse.torch.eye(depth).cuda()
+            return ones.index_select(0,batch)
+        # one_hot_vector of predicted label, [bs x 2]
+        # this is tested in macro_F1.py
+        one_hot_logits = one_hot_v(pred)
+        labels =  torch.max(labels, dim=1)[1]
+        log.info("THE LABELS")
+        log.info(labels)
+        self.f1_scorer(one_hot_logits.long(), labels.long())
+
+    def make_instance(self, record, idx, indexers) -> Type[Instance]:
+        """Convert a single record to an AllenNLP Instance."""
+        tokens = record['text'].split()  # already space-tokenized by Moses
+        tokens = self._pad_tokens(tokens)
+        text_field = sentence_to_text_field(tokens, indexers)
+
+        d = {}
+        d["idx"] = MetadataField(idx)
+
+        d['input1'] = text_field
+        for i in range(1, self.num_spans + 1):
+            d["span"+str(i)+"s"] = ListField([self._make_span_field(t['span'+str(i)], text_field, 1)
+                                 for t in record['targets']])
+
+        # Always use multilabel targets, so be sure each label is a list.
+        labels = [utils.wrap_singleton_string(t['label'])
+                  for t in record['targets']]
+        d['labels'] = ListField([MultiLabelField(label_set,
+                                                 label_namespace=self._label_namespace,
+                                                 skip_indexing=False)
+                                 for label_set in labels])
+        return Instance(d)
+
 @register_task('ultrafine', rel_path = 'ultrafine')
 class UltrafinedCoreferenceTask(SpanTask):
     def __init__(self, path, domain=["general", "fine", "finer"], single_sided=False, **kw):
@@ -1793,25 +1843,27 @@ class UltrafinedCoreferenceTask(SpanTask):
         self.num_spans = 2
         self.tag_list = domain
         num_domains = 3
-        self.loss_weights = torch.FloatTensor([1, 83/17]).cuda()
+        self.loss_weights = None
+        #self.loss_weights = torch.FloatTensor([1, 83/17])
         self.micro_subset_scorers = create_subset_scorers(num_domains, F1Measure, positive_label=1)
         self.macro_subset_scorers = create_subset_scorers(num_domains, macro_f1.MacroF1)
         super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=True, **kw)
-
+    
     def _make_span_field(self, s, text_field, offset=1):
         return SpanField(s[0] + offset, s[1] + offset, text_field)
 
-
     def make_instance(self, record, idx, indexers) -> Type[Instance]:
         """Convert a single record to an AllenNLP Instance."""
-        tokens = record['text'].split()  # already space-tokenized by Moses
+        tokens = record['text'].split(" ")  # already space-tokenized by Moses
         tokens = self._pad_tokens(tokens)
         type_label_tokens = record["targets"][0]['span2']
         type_length = len(type_label_tokens)
     
-        offset = len(tokens) + type_length - 512
+        offset = len(tokens) + type_length + 1 - 512
+        # the +1 is for the SEP at the end.
+
         # if the length of tokens and the appended type is too much.
-        if len(tokens) + type_length > 512:
+        if len(tokens) + type_length + 1 > 512:
           span_indices = record["targets"][0]['span1']
           # make sure you strip the part of the text that doesn't contain the 
           # span
@@ -1822,13 +1874,16 @@ class UltrafinedCoreferenceTask(SpanTask):
             # remove left end
             tokens = tokens[0] + tokens[len(tokens) - offset + 1:]
         tokens.extend(type_label_tokens)# append to become [CLS] text [SEP] label
+        tokens.extend(["SEP"])
         text_field = sentence_to_text_field(tokens, indexers) # add to the vocabulary
-
         d = {}
         d["idx"] = MetadataField(idx)
         d['input1'] = text_field
         d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
                                  for t in record['targets']])
+        d['sent1_str'] = MetadataField(record["targets"][0]["span1_text"])
+        d["sent2_str"] = MetadataField(" ".join(record["targets"][0]["span2"]))
+        d["input1_str"] =  MetadataField(record["text"])
         d['span2s'] = ListField([self._make_span_field([len(tokens) - type_length, len(tokens) - 1], text_field, 0)])
         # Always use multilabel targets, so be sure each label is a list.
         
@@ -1836,6 +1891,29 @@ class UltrafinedCoreferenceTask(SpanTask):
                   for t in record['targets']]
         d['labels'] = ListField([MultiLabelField(label_set, label_namespace=self._label_namespace, skip_indexing=False) for label_set in labels])
         return Instance(d)
+
+    def load_data(self):
+        iters_by_split = collections.OrderedDict()
+        for split, filename in self._files_by_split.items():
+            #  # Lazy-load using RepeatableIterator.
+            #  loader = functools.partial(utils.load_json_data,
+            #                             filename=filename)
+            #  iter = serialize.RepeatableIterator(loader)
+            iter = list(self._stream_records(filename))
+            if split == 'train':
+                log.info(iter[0])
+                only_all_ones = [i for i in iter if i['targets'][0]["label"] == True]
+                only_all_zeros = [i for i in iter if i['targets'][0]['label'] == False]
+                final = only_all_ones + only_all_zeros[:len(only_all_ones)]
+                import numpy as np
+                np.random.shuffle(final)
+                iters_by_split[split] = final
+                log.info("even distribution")
+                log.info("with "+ str(len(only_all_ones))+"number of Trues in train")
+                log.info(" and "+str(len(final))+" examples overall")
+            else:
+                iters_by_split[split] = iter
+        return iters_by_split
 
     def process_split(self, records, indexers) -> Iterable[Type[Instance]]:
         ''' Process split text into a list of AllenNLP Instances. '''
@@ -1861,10 +1939,6 @@ class UltrafinedCoreferenceTask(SpanTask):
         # this is tested in macro_F1.py
         one_hot_logits = one_hot_v(pred)
         labels =  torch.max(labels, dim=1)[1]
-        log.info("THE LOGITS GIVEN")
-        log.info(one_hot_logits)
-        log.info("THE LABELS")
-        log.info(labels)
         self.micro_f1_scorer(one_hot_logits.long(), labels.long())
         self.macro_f1_scorer(one_hot_logits.long(), labels.long())
         if tagmask is not None:
@@ -1885,7 +1959,7 @@ class UltrafinedCoreferenceTask(SpanTask):
         '''Get metrics specific to the task'''
         micro_f1 = self.micro_f1_scorer.get_metric(reset)[2]
         macro_f1 = self.macro_f1_scorer.get_metric(reset)
-        collected_metrics = {"overall_micro_f1": micro_f1, "accuracy": self.acc_scorer.get_metric(reset), "f1": macro_f1, "overall_macro_f1": macro_f1}
+        collected_metrics = {"overall_micro_f1": micro_f1, "accuracy": self.acc_scorer.get_metric(reset), "f1": micro_f1, "overall_macro_f1": macro_f1}
         collected_metrics.update(collect_subset_scores(self.micro_subset_scorers, "microF1", self.domains, reset))
         collected_metrics.update(collect_subset_scores(self.macro_subset_scorers, "macroF1", self.domains, reset))
         for v,k in collected_metrics.items():

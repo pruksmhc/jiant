@@ -8,3 +8,6 @@
 [submodule "src/openai_transformer_lm/pytorch_huggingface"]
 	path = src/openai_transformer_lm/pytorch_huggingface
 	url = https://github.com/huggingface/pytorch-openai-transformer-lm.git
+[submodule "imbalanced-dataset-sampler"]
+	path = imbalanced-dataset-sampler
+	url = https://github.com/ufoym/imbalanced-dataset-sampler.git

@@ -12,6 +12,8 @@ import numpy as np
 
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils import data 
+from torch.utils.data.sampler import WeightedRandomSampler
 from torch.nn.utils.clip_grad import clip_grad_norm_
 from tensorboardX import SummaryWriter  # pylint: disable=import-error
 
@@ -21,11 +23,10 @@ from allennlp.data.iterators import BasicIterator, BucketIterator  # pylint: dis
 from allennlp.training.learning_rate_schedulers import LearningRateScheduler  # pylint: disable=import-error
 from allennlp.training.optimizers import Optimizer  # pylint: disable=import-error
 from allennlp.nn.util import move_to_device, device_mapping
-
+from .sampler import sampler
 from .utils.utils import assert_for_log  # pylint: disable=import-error
 from .evaluate import evaluate
 from .utils import config
-
 
 def build_trainer_params(args, task_names):
     ''' In an act of not great code design, we wrote this helper function which
@@ -271,11 +272,19 @@ class SamplingMultiTaskTrainer:
             for field in pad_dict:
                 for pad_field in pad_dict[field]:
                     sorting_keys.append((field, pad_field))
-            iterator = BucketIterator(sorting_keys=sorting_keys,
-                                      max_instances_in_memory=10000,
-                                      batch_size=batch_size,
-                                      biggest_batch_first=True)
-            tr_generator = iterator(task.train_data, num_epochs=None)
+            iterator = BasicIterator(max_instances_in_memory=10000,
+                                      batch_size=batch_size)
+            loss_weights = getattr(task, "loss_weights", None)
+            if loss_weights is None:
+                tr_generator = iterator(task.train_data, num_epochs=None)
+            else:
+                sampler = sampler.ImbalancedDatasetSampler(task.train_data, pad_dict)
+                tr_generator = torch.utils.data.DataLoader(
+                    task.train_data, 
+                    sampler=sampler.ImbalancedDatasetSampler(task.train_data),
+                    batch_size=batch_size, 
+                    **kwargs
+                    )
             tr_generator = move_to_device(tr_generator, self._cuda_device)
             task_info['iterator'] = iterator
 
@@ -316,6 +325,13 @@ class SamplingMultiTaskTrainer:
         self._task_infos = task_infos
         self._metric_infos = metric_infos
         return task_infos, metric_infos
+
+    def debug(self):
+        dict_results = {}
+        for name, param in self._model.named_parameters():
+            if param.requires_grad:
+                dict_results[name] = param.data
+        return dict_results
 
     def train(self, tasks, stop_metric,
               batch_size, n_batches_per_pass,
@@ -697,10 +713,10 @@ class SamplingMultiTaskTrainer:
             val_generator = move_to_device(val_generator, self._cuda_device)
             n_val_batches = math.ceil(max_data_points / batch_size)
             all_val_metrics["%s_loss" % task.name] = 0.0
-
             for batch in val_generator:
                 batch_num += 1
-                out = self._forward(batch, task=task, for_training=False)
+                import pdb; pdb.set_trace()
+                out = self._forward(batch, task=task, for_training=False, print_logits=True)
                 loss = out["loss"]
                 all_val_metrics["%s_loss" %
                                 task.name] += loss.data.cpu().numpy()
@@ -859,10 +875,10 @@ class SamplingMultiTaskTrainer:
 
         return should_stop
 
-    def _forward(self, batch, for_training, task=None):
+    def _forward(self, batch, for_training, task=None, print_logits=False):
         ''' At one point this does something, now it doesn't really do anything '''
         tensor_batch = move_to_device(batch, self._cuda_device)
-        model_out = self._model.forward(task, tensor_batch)
+        model_out = self._model.forward(task, tensor_batch, print=print_logits)
         return model_out
 
     def _description_from_metrics(self, metrics):

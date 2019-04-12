@@ -41,7 +41,8 @@ class MacroF1():
     f_score = (1 + self.beta) * precision * recall / denom
     f_score = np.average(f_score)
     return torch.from_numpy(np.array(f_score))
- 
+
+
 """
 logits = torch.Tensor([[0.01, 0.234],[0.01, 0.234], [0.01, 0.234], [0.8, 0.2]])
 labels = torch.Tensor([1, 1, 0, 0])
