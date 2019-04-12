@@ -385,6 +385,7 @@ class RankingTask(Task):
     ''' Generic sentence ranking task, given some input '''
     pass
 
+
 @register_task('sst', rel_path='SST-2/')
 class SSTTask(SingleClassificationTask):
     ''' Task class for Stanford Sentiment Treebank.  '''

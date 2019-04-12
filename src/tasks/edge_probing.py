@@ -11,27 +11,18 @@ from allennlp.training.metrics import CategoricalAccuracy, \
     BooleanAccuracy, F1Measure
 from ..allennlp_mods.correlation import FastMatthews
 
-from allennlp.data.tokenizers import Token
 # Fields for instance processing
 from allennlp.data import Instance, Token
 from allennlp.data.fields import TextField, LabelField, \
     SpanField, ListField, MetadataField
 from ..allennlp_mods.multilabel_field import MultiLabelField
-from allennlp.data import vocabulary
 
 from ..utils import serialize
 from ..utils import utils
-from ..utils import data_loaders
-from ..scorers import gap_scorer
-
-import torch
-import torch.nn as nn
-import numpy as np
-import torch.nn.functional as F
 
 from typing import Iterable, Sequence, List, Dict, Any, Type
 
-from .tasks import Task, sentence_to_text_field, create_subset_scorers, collect_subset_scores, update_subset_scorers
+from .tasks import Task, sentence_to_text_field
 from .registry import register_task, REGISTRY  # global task registry
 
 ##
@@ -234,7 +225,13 @@ class EdgeProbingTask(Task):
         metrics['recall'] = recall
         metrics['f1'] = f1
         return metrics
-        
+
+##
+# Task definitions. We call the register_task decorator explicitly so that we
+# can group these in the code.
+##
+
+
 ##
 # Core probing tasks. as featured in the paper.
 ##
@@ -278,12 +275,12 @@ register_task('edges-srl-conll2012', rel_path='edges/srl_conll2012',
               }, is_symmetric=False)(EdgeProbingTask)
 # Re-processed version of edges-coref-ontonotes, via AllenNLP data loaders.
 register_task('edges-coref-ontonotes-conll',
-               rel_path='data/glue/edges/ontonotes-coref-conll',
-               label_file="labels.txt", files_by_split={
-                   'train': "coref_conll_ontonotes_en_train.json",
-                   'val': "coref_conll_ontonotes_en_dev.json",
-                   'test': "coref_conll_ontonotes_en_test.json",
-               }, is_symmetric=False)(EdgeProbingTask)
+              rel_path='edges/ontonotes-coref-conll',
+              label_file="labels.txt", files_by_split={
+                  'train': "coref_conll_ontonotes_en_train.json",
+                  'val': "coref_conll_ontonotes_en_dev.json",
+                  'test': "coref_conll_ontonotes_en_test.json",
+              }, is_symmetric=False)(EdgeProbingTask)
 # SPR1, as an edge-labeling task (multilabel).
 register_task('edges-spr1', rel_path='edges/spr1',
               label_file="labels.txt", files_by_split={
@@ -344,12 +341,12 @@ register_task('edges-srl-conll2005', rel_path='edges/srl_conll2005',
                   'test': "test.wsj.edges.json",
               }, is_symmetric=False)(EdgeProbingTask)
 # Coreference on OntoNotes corpus. Two labels.
-register_task('edges-coref-ontonotes', rel_path='data/glue/edges/ontonotes/coref',
-               label_file="labels.txt", files_by_split={
-                   'train': "train.edges.json",
-                   'val': "dev.edges.json",
-                   'test': "test.edges.json",
-               }, is_symmetric=False)(EdgeProbingTask)
+register_task('edges-coref-ontonotes', rel_path='edges/ontonotes-coref',
+              label_file="labels.txt", files_by_split={
+                  'train': "train.edges.json",
+                  'val': "dev.edges.json",
+                  'test': "test.edges.json",
+              }, is_symmetric=False)(EdgeProbingTask)
 # Entity type labeling on CoNLL 2003.
 register_task('edges-ner-conll2003', rel_path='edges/ner_conll2003',
               label_file="labels.txt", files_by_split={
