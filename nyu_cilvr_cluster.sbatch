@@ -27,10 +27,8 @@ source activate jiant_new
 
 eval_cmd="do_target_task_training = 1, do_full_eval = 1, batch_size = 8, write_preds = test, write_strict_glue_format = 1"
 
-## GAP training with null sent encoder,  lr = 0.0001 ## BERT LARGE
-python main.py --config_file config/baselinesuperglue/superglue.conf  --overrides "pretrain_tasks = gap-coreference,  target_tasks=gap-coreference, run_name = null_enc, project_dir=gap, bert_embeddings_mode = top,  exp_name=bert_large_uncased, sep_embs_for_skip=1,  sent_enc = \"null\", bert_model_name = bert-large-uncased, ${eval_cmd}"
+function gap_then_winograd() {
+	python main.py --config_file config/baselinesuperglue/superglue.conf  --overrides "pretrain_tasks = gap-coreference, do_pretrain=1, do_target_task_training=1, target_tasks=winograd-coreference, run_name = null_enc_gap_then_winograd, project_dir=winograd, bert_embeddings_mode = top,  exp_name=bert_large_uncased, sep_embs_for_skip=1,  do_full_eval=1, sent_enc = \"null\", bert_model_name = bert-large-uncased,"
+}
 
-
-# Nulle ncoder, BERT base
-python main.py --config_file config/baselinesuperglue/superglue.conf  --overrides "pretrain_tasks = gap-coreference, do_pretrain = 0,  target_tasks=gap-coreference, run_name = null_enc, project_dir=gap, bert_embeddings_mode = top,  exp_name=bert_base_uncased, sep_embs_for_skip=1, skip_embs = 1, sent_enc = \"null\", bert_model_name = bert-base-uncased, ${eval_cmd}"
-
+gap_then_winograd

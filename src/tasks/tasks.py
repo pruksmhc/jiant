@@ -1773,10 +1773,10 @@ class SpanTask(Task):
 @register_task('winograd-coreference', rel_path = 'winograd-coref')
 class WinogradCoreferenceTask(SpanTask):
     def __init__(self, path, single_sided=False, **kw):
-        self._files_by_split = {'train': "train_final", 'val': "val_final",'test': "test_final"}
+        self._files_by_split = {'train': "train_after_redistribution", 'val': "val_same_distribution_test",'test': "test_final"}
         self.num_spans = 2
         super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=single_sided, **kw)
-
+        
     def _stream_records(self, filename):
         skip_ctr = 0
         total_ctr = 0

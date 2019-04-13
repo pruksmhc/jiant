@@ -64,7 +64,7 @@ class GAPScorer(object):
     def __call__(self, predictions, labels):
         """Score the system annotations against gold.
         Args:
-        predictiosn: torch tensor of batch x 3
+        predictiosn: torch tensor of batch x 3,  doesn't have to be one-hot vector yet. 
         system_annotations: batch x 3 Torch numpy list
         Returns:
         None

@@ -164,57 +164,62 @@ from typing import Dict, Iterable, List
                               torch.unbind(masks, dim=0)):
             yield pred[mask].numpy()  # only non-masked predictions
 
+
     def get_predictions(self, logits: torch.Tensor):
         """Return class probabilities, same shape as logits.
+
         Args:
             logits: [batch_size, num_targets, n_classes]
+
         Returns:
             probs: [batch_size, num_targets, n_classes]
         """
         if self.loss_type == 'sigmoid':
             return torch.sigmoid(logits)
         elif self.loss_type == "softmax":
-            return F.softmax(logits)
+            logits = logits.squeeze(dim=1)
+            pred = torch.nn.Softmax(dim=1)(logits)
+            pred = torch.argmax(pred, dim=1)
+            return pred
         else:
-            raise ValueError("Unsupported loss type" % self.loss_type)
+            raise ValueError("Unsupported loss type '%s' "
+                             "for edge probing." % self.loss_type)
 
     def compute_loss(self, logits: torch.Tensor,
-                     labels: torch.Tensor, task: Task):
+                     labels: torch.Tensor, task):
         """ Compute loss & eval metrics.
+
         Expect logits and labels to be already "selected" for good targets,
         i.e. this function does not do any masking internally.
+
         Args:
             logits: [total_num_targets, n_classes] Tensor of float scores
             labels: [total_num_targets, n_classes] Tensor of sparse binary targets
+
         Returns:
             loss: scalar Tensor
         """
-        binary_preds = logits.ge(0).long()  # {0,1}
-
+        binary_preds = self.get_predictions(logits)  # {0,1}
+        def one_hot_v(batch, depth=2):
+            ones = torch.sparse.torch.eye(depth).cuda()
+            return ones.index_select(0,batch)
+        binary_preds = one_hot_v(binary_preds)
         # Matthews coefficient and accuracy computed on {0,1} labels.
-        task.mcc_scorer(binary_preds, labels.long())
-        task.acc_scorer(binary_preds, labels.long())
-
+        task.acc_scorer(binary_preds.long(), labels.long())
         # F1Measure() expects [total_num_targets, n_classes, 2]
         # to compute binarized F1.
-        if self.num_spans == 2:
-            binary_scores = torch.stack([-1 * logits, logits], dim=2)
-            task.f1_scorer(binary_scores, labels)
-        else:
-            task.f1_scorer(logits, labels)
-            targets = (labels == 1).nonzero()[:,1]
+        label_ints = torch.argmax(labels, dim=1)
+        task.micro_f1_scorer(binary_preds, label_ints)
 
         if self.loss_type == 'sigmoid':
-            if self.num_spans == 2:
-                return F.binary_cross_entropy(torch.sigmoid(logits),
-                                              labels.float())
-            else:
-                raise ValueError("Sigmoid only supported for binary output currently")
-        elif self.loss_type == "softmax":
-            targets = (labels == 1).nonzero()[:, 1]
+            return F.binary_cross_entropy(torch.sigmoid(logits),
+                                          labels.float())
+        elif self.loss_type == 'softmax':
+            targets = (labels == 1).nonzero()[:,1]
             return F.cross_entropy(logits, targets.long())
         else:
-            raise ValueError("Unsupported loss type ." % self.loss_type)
+            raise ValueError("Unsupported loss type '%s' "
+                             "for edge probing." % self.loss_type)
 
 
 #TODO(Yada): Generalize to N-Span module.
@@ -395,32 +400,40 @@ class TwoSpanClassifierModule(nn.Module):
             raise ValueError("Unsupported loss type" % self.loss_type)
 
     def compute_loss(self, logits: torch.Tensor,
-                     labels: torch.Tensor, task: Task):
+                     labels: torch.Tensor, task):
         """ Compute loss & eval metrics.
+
         Expect logits and labels to be already "selected" for good targets,
         i.e. this function does not do any masking internally.
+
         Args:
             logits: [total_num_targets, n_classes] Tensor of float scores
             labels: [total_num_targets, n_classes] Tensor of sparse binary targets
+
         Returns:
             loss: scalar Tensor
         """
-        binary_preds = logits.ge(0).long()  # {0,1}
-
+        binary_preds = self.get_predictions(logits)  # {0,1}
+        def one_hot_v(batch, depth=2):
+            ones = torch.sparse.torch.eye(depth).cuda()
+            return ones.index_select(0,batch)
+        binary_preds = one_hot_v(binary_preds)
         # Matthews coefficient and accuracy computed on {0,1} labels.
-        task.mcc_scorer(binary_preds, labels.long())
-        task.acc_scorer(binary_preds, labels.long())
-
+        task.acc_scorer(binary_preds.long(), labels.long())
         # F1Measure() expects [total_num_targets, n_classes, 2]
         # to compute binarized F1.
-        binary_scores = torch.stack([-1 * logits, logits], dim=2)
-        task.f1_scorer(binary_scores, labels)
+        label_ints = torch.argmax(labels, dim=1)
+        task.micro_f1_scorer(binary_preds, label_ints)
 
         if self.loss_type == 'sigmoid':
             return F.binary_cross_entropy(torch.sigmoid(logits),
                                           labels.float())
+        elif self.loss_type == 'softmax':
+            targets = (labels == 1).nonzero()[:,1]
+            return F.cross_entropy(logits, targets.long())
         else:
-            raise ValueError("Unsupported loss type ." % self.loss_type)
+            raise ValueError("Unsupported loss type '%s' "
+                             "for edge probing." % self.loss_type)
 
 class ThreeSpanClassifierModule(TwoSpanClassifierModule):
     ''' 
@@ -552,7 +565,7 @@ class ThreeSpanClassifierModule(TwoSpanClassifierModule):
         return out
 
     def compute_loss(self, logits: torch.Tensor,
-                     labels: torch.Tensor, task: Task):
+                     labels: torch.Tensor, task):
         """ Compute loss & eval metrics.
 
         Expect logits and labels to be already "selected" for good targets,
@@ -565,23 +578,25 @@ class ThreeSpanClassifierModule(TwoSpanClassifierModule):
         Returns:
             loss: scalar Tensor
         """
-        # https://stackoverflow.com/questions/32013927/in-torch-how-do-i-create-a-1-hot-tensor-from-a-list-of-integer-labels 
-        # 3 - way loss. 
+        binary_preds = self.get_predictions(logits)  # {0,1}
+        def one_hot_v(batch, depth=2):
+            ones = torch.sparse.torch.eye(depth).cuda()
+            return ones.index_select(0,batch)
+        binary_preds = one_hot_v(binary_preds, depth=labels.size()[1])
+        # Matthews coefficient and accuracy computed on {0,1} labels.
+        task.acc_scorer(binary_preds.long(), labels.long())
+        # F1Measure() expects [total_num_targets, n_classes, 2]
+        # to compute binarized F1.
+        label_ints = torch.argmax(labels, dim=1)
+        # the GAP scorer expects these logits.
+        task.f1_scorer(logits.long(), labels.long())
 
-        # Accuracy computed on {0,1} labels.
-
-        # this scorer wants a 1-hot encoding of the first two classes
-        # and the gold labels of the first two classes
-        task.f1_scorer(logits, labels)
-        targets = (labels == 1).nonzero()[:,1]
         if self.loss_type == 'sigmoid':
-            if self.num_spans == 2:
-                return F.binary_cross_entropy(torch.sigmoid(logits),
-                                              labels.float())
-            else:
-                raise ValueError("Sigmoid only supported for binary output currently")
-        elif self.loss_type == "softmax":
-            targets = (labels == 1).nonzero()[:, 1]
+            return F.binary_cross_entropy(torch.sigmoid(logits),
+                                          labels.float())
+        elif self.loss_type == 'softmax':
+            targets = (labels == 1).nonzero()[:,1]
             return F.cross_entropy(logits, targets.long())
         else:
-            raise ValueError("Unsupported loss type ." % self.loss_type)
+            raise ValueError("Unsupported loss type '%s' "
+                             "for edge probing." % self.loss_type)
