@@ -125,7 +125,7 @@ class EdgeProbingTask(Task):
         self.mcc_scorer = FastMatthews()
         self.acc_scorer = BooleanAccuracy()  # binary accuracy
         self.f1_scorer = F1Measure(positive_label=1)  # binary F1 overall
-        self.val_metric = "overall_micro_f1"
+        self.val_metric = "%s_f1" % self.name 
         self.val_metric_decreases = False
 
     def _stream_records(self, filename):
@@ -258,9 +258,9 @@ class EdgeProbingTask(Task):
       return
 
 
-@register_task("ultrafine_balanced", rel_path="ultrafine")
+@register_task("ultrafine-balanced", rel_path="ultrafine")
 class UltrafineBalanced(EdgeProbingTask):
- def __init__(self, path, domain=["general", "fine", "finer"], single_sided=False, **kw):
+    def __init__(self, path, domain=["general", "fine", "finer"], single_sided=False, **kw):
         self._domain_namespace = kw["name"] + "_tags"
         self._files_by_split = {'train': "final_parsed_train.json", 'val': 'final_parsed_val.json', "test": "final_parsed_test.json"}
         # current new one. 
@@ -270,6 +270,7 @@ class UltrafineBalanced(EdgeProbingTask):
         self.domains = domain
         self.tag_list = domain
         num_domains = 3
+        self.val_metric = "accuracy"
         self.micro_subset_scorers = create_subset_scorers(num_domains, F1Measure, positive_label=1)
         self.macro_subset_scorers = create_subset_scorers(num_domains, MacroF1)
         super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=True, **kw)
@@ -294,6 +295,7 @@ class UltrafineBalanced(EdgeProbingTask):
             # remove left end
             tokens = tokens[0] + tokens[len(tokens) - offset + 1:]
         tokens.extend(type_label_tokens)# append to become [CLS] text [SEP] label
+        tokens.extend("[SEP]")
         text_field = sentence_to_text_field(tokens, indexers) # add to the vocabulary
 
         d = {}
@@ -353,7 +355,7 @@ class UltrafineBalanced(EdgeProbingTask):
         '''Get metrics specific to the task'''
         micro_f1 = self.micro_f1_scorer.get_metric(reset)[2]
         macro_f1 = self.macro_f1_scorer.get_metric(reset)
-        collected_metrics = {"overall_micro_f1": micro_f1, "overall_macro_f1": macro_f1}
+        collected_metrics = {"overall_micro_f1": micro_f1, "overall_macro_f1": macro_f1, "accuracy": self.acc_scorer.get_metric(reset)}
         collected_metrics.update(collect_subset_scores(self.micro_subset_scorers, "microF1", self.domains, reset))
         collected_metrics.update(collect_subset_scores(self.macro_subset_scorers, "macroF1", self.domains, reset))
         for v,k in collected_metrics.items():
@@ -376,6 +378,7 @@ class UltrafineBalanced(EdgeProbingTask):
                 final = only_all_ones + only_all_zeros[:len(only_all_ones)]
                 import numpy as np
                 np.random.shuffle(final)
+                np.random.shuffle(final)
                 iters_by_split[split] = final
                 log.info("even distribution")
                 log.info("with "+ str(len(only_all_ones))+"number of Trues in train")
@@ -383,6 +386,28 @@ class UltrafineBalanced(EdgeProbingTask):
             else:
                 iters_by_split[split] = iter
         return iters_by_split
+
+
+@register_task('winograd-coreference', rel_path = 'winograd-coref')
+class WinogradCoreferenceTask(EdgeProbingTask):
+    def __init__(self, path, single_sided=False, **kw):
+        self._files_by_split = {'train': "train_final", 'val': "val_final",'test': "test_final"}
+        super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=single_sided, **kw)
+
+    def _stream_records(self, filename):
+        skip_ctr = 0
+        total_ctr = 0
+        for records in utils.load_json_data(filename):
+            total_ctr += 1
+            # Skip records with empty targets.
+            # TODO(ian): don't do this if generating negatives!
+            if not records.get('targets', None):
+                skip_ctr += 1
+                continue
+            yield records
+        log.info("Read=%d, Skip=%d, Total=%d from %s",
+                 total_ctr - skip_ctr, skip_ctr, total_ctr,
+                 filename)
 
 @register_task('ultrafine', rel_path = 'ultrafine')
 class UltrafinedCoreferenceTask(EdgeProbingTask):
@@ -396,6 +421,7 @@ class UltrafinedCoreferenceTask(EdgeProbingTask):
         self.domains = domain
         self.tag_list = domain
         num_domains = 3
+        self.val_metric = "overall_micro_f1"
         self.micro_subset_scorers = create_subset_scorers(num_domains, F1Measure, positive_label=1)
         self.macro_subset_scorers = create_subset_scorers(num_domains, MacroF1)
         super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=True, **kw)
