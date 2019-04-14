@@ -626,7 +626,7 @@ class MultiTaskModel(nn.Module):
         self.elmo = args.elmo and not args.elmo_chars_only
         self.sep_embs_for_skip = args.sep_embs_for_skip
 
-    def forward(self, task, batch, predict=False):
+    def forward(self, task, batch, predict=False, print_logits=False):
         '''
         Pass inputs to correct forward pass
         Args:
@@ -645,11 +645,6 @@ class MultiTaskModel(nn.Module):
                 self.utilization(get_batch_utilization(batch['input']))
         if isinstance(task, SingleClassificationTask):
             out = self._single_sentence_forward(batch, task, predict)
-        elif task.name == 'ultrafine':
-            sent_embs, sent_mask = self.sent_encoder(batch['input1'], task)
-            module = getattr(self, "%s_mdl" % task.name)
-            out = module.forward(batch, sent_embs, sent_mask,
-                                 task, predict)
         elif isinstance(task, MultiNLIDiagnosticTask):
             out = self._pair_sentence_MNLI_diagnostic_forward(
                 batch, task, predict)
@@ -675,7 +670,7 @@ class MultiTaskModel(nn.Module):
             sent_embs, sent_mask = self.sent_encoder(batch['input1'], task)
             module = getattr(self, "%s_mdl" % task.name)
             out = module.forward(batch, sent_embs, sent_mask,
-                                 task, predict)
+                                 task, predict, print_logits=print_logits)
         elif isinstance(task, SequenceGenerationTask):
             out = self._seq_gen_forward(batch, task, predict)
         elif isinstance(task, (GroundedTask, GroundedSWTask)):

@@ -702,7 +702,7 @@ class SamplingMultiTaskTrainer:
 
             for batch in val_generator:
                 batch_num += 1
-                out = self._forward(batch, task=task, for_training=False)
+                out = self._forward(batch, task=task, for_training=False, print_logits=True)
                 loss = out["loss"]
                 all_val_metrics["%s_loss" %
                                 task.name] += loss.data.cpu().numpy()
@@ -720,7 +720,7 @@ class SamplingMultiTaskTrainer:
                         n_val_batches,
                         description)
                     task_info['last_log'] = time.time()
-            assert batch_num == n_val_batches
+            #assert batch_num == n_val_batches
 
             # Get task validation metrics and store in all_val_metrics
             task_metrics = task.get_metrics(reset=True)
@@ -737,7 +737,7 @@ class SamplingMultiTaskTrainer:
             else:
                 # triggers for single-task cases and during MTL when task val
                 # metric increases
-                all_val_metrics["micro_avg"] += all_val_metrics[task.val_metric] * n_examples
+                all_val_metrics["micro_avg"] += all_val_metrics[task.val_metric] * n_examples.item()
                 all_val_metrics["macro_avg"] += all_val_metrics[task.val_metric]
             n_examples_overall += n_examples
 
@@ -861,10 +861,10 @@ class SamplingMultiTaskTrainer:
 
         return should_stop
 
-    def _forward(self, batch, for_training, task=None):
+    def _forward(self, batch, for_training, task=None, print_logits=False):
         ''' At one point this does something, now it doesn't really do anything '''
         tensor_batch = move_to_device(batch, self._cuda_device)
-        model_out = self._model.forward(task, tensor_batch)
+        model_out = self._model.forward(task, tensor_batch, print_logits=print_logits)
         return model_out
 
     def _description_from_metrics(self, metrics):

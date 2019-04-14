@@ -6,7 +6,7 @@ import logging as log
 import json
 import pandas as pd
 from csv import QUOTE_NONE, QUOTE_MINIMAL
-
+import itertools
 import torch
 from allennlp.data.iterators import BasicIterator
 from . import tasks as tasks_module
@@ -77,7 +77,7 @@ def evaluate(model, tasks: Sequence[tasks_module.Task], batch_size: int,
             for field in FIELDS_TO_EXPORT:
                 if field in batch:
                     cols[field] = _coerce_list(batch[field])
-
+            cols["tagmask"] = batch["tagmask"].data.tolist()
             # Transpose data using Pandas
             df = pd.DataFrame(cols)
             task_preds.append(df)
@@ -93,7 +93,7 @@ def evaluate(model, tasks: Sequence[tasks_module.Task], batch_size: int,
         # Update metrics
         task_metrics = task.get_metrics(reset=True)
         for name, value in task_metrics.items():
-            all_metrics["%s_%s" % (task.name, name)] = value
+            all_metrics["%s" % (name)] = value
         all_metrics["micro_avg"] += all_metrics[task.val_metric] * n_examples
         all_metrics["macro_avg"] += all_metrics[task.val_metric]
         n_examples_overall += n_examples
@@ -128,7 +128,7 @@ def write_preds(tasks: Iterable[tasks_module.Task], all_preds, pred_dir, split_n
         preds_df = all_preds[task.name]
         # Tasks that use _write_glue_preds:
         glue_style_tasks = (tasks_module.ALL_NLI_PROBING_TASKS
-                            + tasks_module.ALL_GLUE_TASKS + ['wmt'])
+                            + tasks_module.ALL_GLUE_TASKS + ['wmt'] + ["ultrafine", "ultrafine-balanced"])
         if task.name in glue_style_tasks:
             # Strict mode: strict GLUE format (no extra cols)
             strict = (
@@ -254,17 +254,18 @@ def _write_glue_preds(task_name: str, preds_df: pd.DataFrame,
         if name not in df:
             df[name] = val
         df[name].fillna(value=val, inplace=True)
-
     preds_df = preds_df.copy()
     _add_default_column(preds_df, 'idx', -1)
     _add_default_column(preds_df, 'sent1_str', "")
     _add_default_column(preds_df, 'sent2_str', "")
     _add_default_column(preds_df, 'labels', -1)
+    _add_default_column(preds_df, 'tagmask', -1)
     # Rename columns to match output headers.
     preds_df.rename({"idx": "index",
                      "preds": "prediction",
                      "sent1_str": "sentence_1",
                      "sent2_str": "sentence_2",
+                     "tagmask": "category",
                      "labels": "true_label"},
                     axis='columns', inplace=True)
 

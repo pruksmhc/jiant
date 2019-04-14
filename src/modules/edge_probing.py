@@ -5,7 +5,7 @@ import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
 from torch.autograd import Variable
-
+import logging as log
 from ..tasks.edge_probing import EdgeProbingTask
 from .import modules
 
@@ -86,12 +86,10 @@ class EdgeClassifierModule(nn.Module):
         # Span extractor, shared for both span1 and span2.
         self.span_extractor1 = self._make_span_extractor()
         if self.is_symmetric or self.single_sided:
-            self.span_extractors = [
-                None, self.span_extractor1, self.span_extractor1]
+            self.span_extractors = [None, self.span_extractor1, self.span_extractor1]
         else:
             self.span_extractor2 = self._make_span_extractor()
-            self.span_extractors = [
-                None, self.span_extractor1, self.span_extractor2]
+            self.span_extractors = [None, self.span_extractor1, self.span_extractor2]
 
         # Classifier gets concatenated projections of span1, span2
         clf_input_dim = self.span_extractors[1].get_output_dim()
@@ -105,7 +103,8 @@ class EdgeClassifierModule(nn.Module):
                 sent_embs: torch.Tensor,
                 sent_mask: torch.Tensor,
                 task: EdgeProbingTask,
-                predict: bool) -> Dict:
+                predict: bool,
+                print_logits: bool = False) -> Dict:
         """ Run forward pass.
 
         Expects batch to have the following entries:
@@ -128,6 +127,7 @@ class EdgeClassifierModule(nn.Module):
             out: dict(str -> Tensor)
         """
         out = {}
+
         batch_size = sent_embs.shape[0]
         out['n_inputs'] = batch_size
 
@@ -138,8 +138,7 @@ class EdgeClassifierModule(nn.Module):
             se_proj2 = self.projs[2](sent_embs_t).transpose(2, 1).contiguous()
 
         # Span extraction.
-        # [batch_size, num_targets] bool
-        span_mask = (batch['span1s'][:, :, 0] != -1)
+        span_mask = (batch['span1s'][:, :, 0] != -1)  # [batch_size, num_targets] bool
         out['mask'] = span_mask
         total_num_targets = span_mask.sum()
         out['n_targets'] = total_num_targets
@@ -150,14 +149,17 @@ class EdgeClassifierModule(nn.Module):
         # span1_emb and span2_emb are [batch_size, num_targets, span_repr_dim]
         span1_emb = self.span_extractors[1](se_proj1, batch['span1s'], **_kw)
         if not self.single_sided:
-            span2_emb = self.span_extractors[2](
-                se_proj2, batch['span2s'], **_kw)
+            span2_emb = self.span_extractors[2](se_proj2, batch['span2s'], **_kw)
             span_emb = torch.cat([span1_emb, span2_emb], dim=2)
         else:
             span_emb = span1_emb
 
         # [batch_size, num_targets, n_classes]
         logits = self.classifier(span_emb)
+        if print_logits:
+            log.info(logits)
+            log.info(self.get_predictions(logits))
+            log.info(batch["labels"]) 
         out['logits'] = logits
 
         # Compute loss if requested.
@@ -168,7 +170,6 @@ class EdgeClassifierModule(nn.Module):
             out['loss'] = self.compute_loss(logits[span_mask],
                                             batch['labels'][span_mask],
                                             task)
-            task.update_subset_metrics(logits[span_mask], batch["labels"][span_mask], tagmask=batch['tagmask'])
 
         if predict:
             # Return preds as a list.
@@ -193,7 +194,7 @@ class EdgeClassifierModule(nn.Module):
         masks = masks.detach().cpu()
         for pred, mask in zip(torch.unbind(preds, dim=0),
                               torch.unbind(masks, dim=0)):
-            yield pred[mask].numpy()  # only non-masked predictions
+            yield pred.numpy()  # only non-masked predictions
 
     def get_predictions(self, logits: torch.Tensor):
         """Return class probabilities, same shape as logits.
@@ -206,7 +207,11 @@ class EdgeClassifierModule(nn.Module):
         """
         if self.loss_type == 'sigmoid':
             return torch.sigmoid(logits)
-        elif self.loss_
+        elif self.loss_type == "softmax":
+            logits = logits.squeeze(dim=1)
+            pred = torch.nn.Softmax(dim=1)(logits)
+            pred = torch.argmax(pred, dim=1)
+            return pred
         else:
             raise ValueError("Unsupported loss type '%s' "
                              "for edge probing." % self.loss_type)
@@ -225,14 +230,18 @@ class EdgeClassifierModule(nn.Module):
         Returns:
             loss: scalar Tensor
         """
-        binary_scores = torch.stack([-1 * logits, logits], dim=2)
-        binary_preds = logits.ge(0).long()  # {0,1}
-
+        binary_preds = self.get_predictions(logits)  # {0,1}
+        def one_hot_v(batch, depth=2):
+            ones = torch.sparse.torch.eye(depth).cuda()
+            return ones.index_select(0,batch)
+        binary_preds = one_hot_v(binary_preds)
         # Matthews coefficient and accuracy computed on {0,1} labels.
-        task.mcc_scorer(binary_preds, labels.long())
-        task.acc_scorer(binary_preds, labels.long())
-        task.macro_f1_scorer(binary_scores, labels)
-        task.micro_f1_scorer(binary_scores, labels)
+        task.acc_scorer(binary_preds.long(), labels.long())
+        # F1Measure() expects [total_num_targets, n_classes, 2]
+        # to compute binarized F1.
+        label_ints = torch.argmax(labels, dim=1)
+        task.micro_f1_scorer(binary_preds, label_ints)
+        task.f1_scorer(binary_preds, label_ints)
 
         if self.loss_type == 'sigmoid':
             return F.binary_cross_entropy(torch.sigmoid(logits),
