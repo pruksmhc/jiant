@@ -183,7 +183,7 @@ class EdgeClassifierModule(nn.Module):
         masks = masks.detach().cpu()
         for pred, mask in zip(torch.unbind(preds, dim=0),
                               torch.unbind(masks, dim=0)):
-            yield pred[mask].numpy()  # only non-masked predictions
+            yield pred.numpy()  # only non-masked predictions
 
     def get_predictions(self, logits: torch.Tensor):
         """Return class probabilities, same shape as logits.

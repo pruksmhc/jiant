@@ -162,7 +162,7 @@ from typing import Dict, Iterable, List
         masks = masks.detach().cpu()
         for pred, mask in zip(torch.unbind(preds, dim=0),
                               torch.unbind(masks, dim=0)):
-            yield pred[mask].numpy()  # only non-masked predictions
+            yield pred.numpy()  # only non-masked predictions
 
 
     def get_predictions(self, logits: torch.Tensor):
@@ -203,13 +203,17 @@ from typing import Dict, Iterable, List
         def one_hot_v(batch, depth=2):
             ones = torch.sparse.torch.eye(depth).cuda()
             return ones.index_select(0,batch)
-        binary_preds = one_hot_v(binary_preds)
+
+        binary_preds = one_hot_v(binary_preds, depth=labels.size()[1])
         # Matthews coefficient and accuracy computed on {0,1} labels.
         task.acc_scorer(binary_preds.long(), labels.long())
         # F1Measure() expects [total_num_targets, n_classes, 2]
         # to compute binarized F1.
         label_ints = torch.argmax(labels, dim=1)
-        task.micro_f1_scorer(binary_preds, label_ints)
+        if task.name == 'winograd-coreference':
+            task.micro_f1_scorer(binary_preds, label_ints)
+        else:
+            task.f1_scorer(logits.long(), labels.long())
 
         if self.loss_type == 'sigmoid':
             return F.binary_cross_entropy(torch.sigmoid(logits),
@@ -383,21 +387,27 @@ class TwoSpanClassifierModule(nn.Module):
         masks = masks.detach().cpu()
         for pred, mask in zip(torch.unbind(preds, dim=0),
                               torch.unbind(masks, dim=0)):
-            yield pred[mask].numpy()  # only non-masked predictions
+            yield pred.numpy()  # only non-masked predictions
 
     def get_predictions(self, logits: torch.Tensor):
         """Return class probabilities, same shape as logits.
         Args:
             logits: [batch_size, num_targets, n_classes]
+
         Returns:
             probs: [batch_size, num_targets, n_classes]
         """
         if self.loss_type == 'sigmoid':
             return torch.sigmoid(logits)
         elif self.loss_type == "softmax":
-            return F.softmax(logits)
+            logits = logits.squeeze(dim=1)
+            pred = torch.nn.Softmax(dim=1)(logits)
+            pred = torch.argmax(pred, dim=1)
+            return pred
         else:
-            raise ValueError("Unsupported loss type" % self.loss_type)
+            raise ValueError("Unsupported loss type '%s' "
+                             "for edge probing." % self.loss_type)
+
 
     def compute_loss(self, logits: torch.Tensor,
                      labels: torch.Tensor, task):
@@ -423,7 +433,7 @@ class TwoSpanClassifierModule(nn.Module):
         # F1Measure() expects [total_num_targets, n_classes, 2]
         # to compute binarized F1.
         label_ints = torch.argmax(labels, dim=1)
-        task.micro_f1_scorer(binary_preds, label_ints)
+        task.f1_scorer(binary_preds, label_ints)
 
         if self.loss_type == 'sigmoid':
             return F.binary_cross_entropy(torch.sigmoid(logits),
@@ -587,9 +597,8 @@ class ThreeSpanClassifierModule(TwoSpanClassifierModule):
         task.acc_scorer(binary_preds.long(), labels.long())
         # F1Measure() expects [total_num_targets, n_classes, 2]
         # to compute binarized F1.
-        label_ints = torch.argmax(labels, dim=1)
         # the GAP scorer expects these logits.
-        task.f1_scorer(logits.long(), labels.long())
+        task.f1_scorer(logits, labels)
 
         if self.loss_type == 'sigmoid':
             return F.binary_cross_entropy(torch.sigmoid(logits),

@@ -34,7 +34,7 @@ from ..utils import utils
 from ..utils.utils import truncate
 from ..utils.data_loaders import load_tsv, process_sentence, load_diagnostic_tsv
 from ..utils.tokenizers import get_tokenizer
-from ..scorers import gap_scorer, macro_f1 
+from ..scorers import gap_scorer
 
 from typing import Iterable, Sequence, List, Dict, Any, Type
 
@@ -1929,7 +1929,6 @@ class GapCoreferenceTask(SpanTask):
         d["idx"] = MetadataField(idx)
 
         d['input1'] = text_field
-
         d['span1s'] = ListField([self._make_span_field(t['span1'], text_field, 1)
                                  for t in record['targets']])
         d['span2s'] = ListField([self._make_span_field(t['span2'], text_field, 1)

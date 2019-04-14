@@ -111,6 +111,8 @@ def align_spans(file_name,  data_dir):
     for i in range(len(gap_text)):
         row = gap_text.iloc[i]
         text = row['text__txt1']
+        if "Grant" in text:
+            import pdb; pdb.set_trace()
         pronoun = row["text__pron"]
         text_2 = row["text__txt2"]
         context = row["quote__quote2"]
@@ -328,7 +330,8 @@ def main(arguments):
     data_dir = "/misc/vlgscratch4/BowmanGroup/yp913/coreference/jiant/data/WNLI/"
     file_name = "result"
     #get_train_test_split()
-    move_yes_val_to_train()
+    align_spans(file_name,  data_dir)
+    #move_yes_val_to_train()
     #align_spans(file_name, data_dir)
     #parse_weird("test",file_name,data_dir)
     #get_train_test_split()
