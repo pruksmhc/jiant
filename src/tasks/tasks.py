@@ -1084,14 +1084,13 @@ class WNLITask(PairClassificationTask):
         tr_data = load_tsv(self._tokenizer_name, os.path.join(path, "train.tsv"), max_seq_len,
                            s1_idx=1, s2_idx=2, label_idx=3, skip_rows=1)
         val_data = load_tsv(self._tokenizer_name, os.path.join(path, "dev.tsv"), max_seq_len,
-                            s1_idx=1, s2_idx=2, label_idx=3, skip_rows=1)
+                            s1idx=1, s2_idx=2, label_idx=3, skip_rows=1)
         te_data = load_tsv(self._tokenizer_name, os.path.join(path, 'test.tsv'), max_seq_len,
                            s1_idx=1, s2_idx=2, has_labels=False, return_indices=True, skip_rows=1)
         self.train_data_text = tr_data
         self.val_data_text = val_data
         self.test_data_text = te_data
         log.info("\tFinished loading Winograd.")
-
 
 @register_task('atomic', rel_path='atomic/')
 class AtomicTask(PairClassificationTask):
@@ -1103,20 +1102,42 @@ class AtomicTask(PairClassificationTask):
         self.load_data(path, max_seq_len)
         self.sentences = self.train_data_text[0] + self.train_data_text[1] + \
             self.val_data_text[0] + self.val_data_text[1]
+        self.scorer1 = BooleanAccuracy()
+        self.scorers = [self.scorer1]
+
+    def update_metrics(self, logits, labels):
+        binary_preds = self.get_predictions(logits)  # {0,1}
+        def one_hot_v(batch, depth=2):
+            ones = torch.sparse.torch.eye(depth).cuda()
+            return ones.index_select(0,batch)
+        binary_preds = one_hot_v(binary_preds, depth=labels.size()[1])
+        # Matthews coefficient and accuracy computed on {0,1} labels.
+        task.acc_scorer(binary_preds.long(), labels.long())
+        label_ints = torch.argmax(labels, dim=1)
+        task.f1_scorer(binary_preds, label_ints)
 
     def load_data(self, path, max_seq_len):
         '''Load the data'''
         tr_data = load_tsv(self._tokenizer_name, os.path.join(path, "train.tsv"), max_seq_len,
-                           s1_idx=1, s2_idx=2, label_idx=3, skip_rows=1)
-        val_data = load_tsv(self._tokenizer_name, os.path.join(path, "dev.tsv"), max_seq_len,
-                            s1_idx=1, s2_idx=2, label_idx=3, skip_rows=1)
+                           s1_idx=2, s2_idx=3, s3_idx=4, label_idx=5, skip_rows=1)
+        val_data = load_tsv(self._tokenizer_name, os.path.join(path, "val.tsv"), max_seq_len,
+                            s1_idx=2, s2_idx=3, s3_idx=4, label_idx=5, skip_rows=1)
         te_data = load_tsv(self._tokenizer_name, os.path.join(path, 'test.tsv'), max_seq_len,
-                           s1_idx=1, s2_idx=2, has_labels=False, return_indices=True, skip_rows=1)
-        self.train_data_text = tr_data
-        self.val_data_text = val_data
-        self.test_data_text = te_data
+                           s1_idx=2, s2_idx=3, has_labels=False, return_indices=True, skip_rows=1)
+        import numpy as np
+        tr_data_zipped = np.vstack(tr_data).T
+        val_data_zipped = np.vstack(val_data).T
+        te_data_zipped = np.vstack(te_data).T
+        tr_second_input = [ t[1] + t[2][1:] for t in tr_data_zipped]
+        val_second_input = [ t[1] + t[2][1:] for t in val_data_zipped]
+        test_second_input = [ t[1] + t[2][1:] for t in te_data_zipped]
+        self.train_data_text = [tr_data[0], tr_second_input, tr_data[3]]
+        # and then we get back to this. 
+        self.val_data_text = [val_data[0], val_second_input, val_data[3]]
+        self.test_data_text = [te_data[0], test_second_input, te_data[3], te_data[4]]
         log.info("\tFinished loading Winograd.")
-
+# ValueError: only one element tensors can be converted to Python scalars
+# and I'll just accept this. 
 @register_task('joci', rel_path='JOCI/')
 class JOCITask(PairOrdinalRegressionTask):
     '''Class for JOCI ordinal regression task'''

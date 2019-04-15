@@ -471,9 +471,9 @@ register_task('edges-srl-conll2005', rel_path='edges/srl_conll2005',
 # Coreference on OntoNotes corpus. Two labels.
 register_task('edges-coref-ontonotes', rel_path='edges/ontonotes-coref',
                label_file="labels.txt", files_by_split={
-                   'train': "train.edges.json",
-                   'val': "dev.edges.json",
-                   'test': "test.edges.json",
+                   'train': "train.json",
+                   'val': "development.json",
+                   'test': "test.json",
                }, is_symmetric=False)(EdgeProbingTask)
 # Entity type labeling on CoNLL 2003.
 register_task('edges-ner-conll2003', rel_path='edges/ner_conll2003',
