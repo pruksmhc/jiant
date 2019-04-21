@@ -23,12 +23,17 @@ class BertEmbedderModule(nn.Module):
             pytorch_pretrained_bert.BertModel.from_pretrained(
                 args.bert_model_name,
                 cache_dir=cache_dir)
+        ids = torch.LongTensor([[  101,  3960,  3825,  2005,  4918,  1005,  1055,  2267,  2495,  1012,2002,  2003,  2200,  8794,  1012,   102,     0,     0,     0,     0,0,     0,     0,     0,     0,     0,     0]])
+        mask = (ids != 0)
+        yo, _ = self.model(ids, token_type_ids=torch.zeros_like(ids), attention_mask=mask,output_all_encoded_layers=True)
+        import pdb; pdb.set_trace()
         self.embeddings_mode = args.bert_embeddings_mode
 
         # Set trainability of this module.
         for param in self.model.parameters():
             param.requires_grad = bool(args.bert_fine_tune)
-
+        # and then you do yo.eval()
+        import pdb; pdb.set_trace()
         # Configure scalar mixing, ELMo-style.
         if self.embeddings_mode == "mix":
             if not args.bert_fine_tune:
@@ -96,6 +101,8 @@ class BertEmbedderModule(nn.Module):
             encoded_layers, _ = self.model(ids, token_type_ids=torch.zeros_like(ids),
                                            attention_mask=mask,
                                            output_all_encoded_layers=True)
+
+            import pdb; pdb.set_trace()
             h_enc = encoded_layers[-1]
 
         if self.embeddings_mode in ["none", "top"]:

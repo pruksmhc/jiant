@@ -46,7 +46,7 @@ from .modules.modules import SentenceEncoder, BoWSentEncoder, \
 from .modules.edge_probing import EdgeClassifierModule
 from .modules.span_modules import ThreeSpanClassifierModule, TwoSpanClassifierModule, SpanClassifierModule
 from .modules.seq2seq_decoder import Seq2SeqDecoder
-
+import logging as log
 
 # Elmo stuff
 # Look in $ELMO_SRC_DIR (e.g. /usr/share/jsalt/elmo) or download from web
@@ -732,6 +732,7 @@ class MultiTaskModel(nn.Module):
             task.update_metrics(logits, labels, tagmask=tagmask)
 
         if predict:
+            log.info(logits)
             if isinstance(task, RegressionTask):
                 if logits.ndimension() > 1:
                     assert logits.ndimension() == 2 and logits[-1] == 1, \

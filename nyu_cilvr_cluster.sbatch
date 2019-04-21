@@ -29,12 +29,20 @@ function gap_then_winograd() {
 }
 
 
+function only_winograd_large() {
+ python main.py --config_file config/baselinesuperglue/final_bert.conf --overrides "pretrain_tasks = winograd-coreference, do_pretrain=1, do_target_task_training=0, target_tasks=winograd-coreference, run_name = null_enc_only_winograd, project_dir=winograd_hope, bert_embeddings_mode = top,  exp_name=bert_large_uncased, tokenizer=bert-large-uncased, batch_size=4, sep_embs_for_skip=1,  do_full_eval=1, sent_enc = \"null\", bert_model_name = bert-large-uncased"
+}
 function only_winograd() {
- python main.py --config_file config/baselinesuperglue/params.conf --overrides "pretrain_tasks = winograd-coreference, do_pretrain=1, do_target_task_training=0, target_tasks=winograd-coreference, run_name = null_enc_only_winograd, project_dir=winograd, bert_embeddings_mode = top,  exp_name=bert_large_uncased, batch_size=4, sep_embs_for_skip=1,  do_full_eval=1, sent_enc = \"null\", bert_model_name = bert-large-uncased"
+ python main.py --config_file config/baselinesuperglue/final_bert.conf --overrides "pretrain_tasks = winograd-coreference, do_pretrain=1, do_target_task_training=0, target_tasks=winograd-coreference, run_name = null_enc_only_winograd_try_again, project_dir=winograd_hope, bert_embeddings_mode = top,  exp_name=bert_base_uncased_try, batch_size=4, sep_embs_for_skip=1,  do_full_eval=1, sent_enc = \"null\", bert_model_name = bert-base-uncased"
 }
 
 function winograd_with_dev_test_switched() {
  python main.py --config_file config/baselinesuperglue/params.conf --overrides "pretrain_tasks = winograd-coreference, do_pretrain=1, do_target_task_training=0, target_tasks=winograd-coreference, run_name = null_enc_only_winograd, project_dir=winograd, bert_embeddings_mode = top,  exp_name=bert_large_uncased_dev_test_switched, batch_size=4, sep_embs_for_skip=1,  do_full_eval=1, sent_enc = \"null\", bert_model_name = bert-large-uncased"
+}
+
+
+function only_gap() {
+ python main.py --config_file config/baselinesuperglue/final_bert.conf --overrides "pretrain_tasks = gap-coreference, do_pretrain=1, do_target_task_training=0, tokenizer=bert-large-uncased, target_tasks=gap-coreference, run_name = null_enc_only_gap, project_dir=gap_again, bert_embeddings_mode = top,  exp_name=bert_large_uncased_try, batch_size=4, sep_embs_for_skip=1,  do_full_eval=1, sent_enc = \"null\", bert_model_name = bert-large-uncased"
 }
 
 
@@ -47,8 +55,5 @@ function only_winograd_with_gap_get_results() {
  python main.py --config_file config/baselinesuperglue/params.conf --overrides "pretrain_tasks = winograd-coreference, do_pretrain=0, write_preds=val, do_target_task_training=0, target_tasks=winograd-coreference, run_name = null_enc_gap_then_winograd, project_dir=winograd, bert_embeddings_mode = top,  exp_name=bert_large_uncased, batch_size=4, sep_embs_for_skip=1,  do_full_eval=1, load_model =1, load_eval_checkpoint=\"/beegfs/yp913/winograd/winograd/bert_large_uncased/null_enc_gap_then_winograd/model_state_main_epoch_12.best_macro.th\",  sent_enc = \"null\", bert_model_name = bert-large-uncased"
 }
 
-
-only_winograd_with_gap_get_results
-
-
+only_gap
 

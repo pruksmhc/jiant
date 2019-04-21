@@ -26,7 +26,6 @@ from .utils.utils import assert_for_log  # pylint: disable=import-error
 from .evaluate import evaluate
 from .utils import config
 
-
 def build_trainer_params(args, task_names):
     ''' In an act of not great code design, we wrote this helper function which
     extracts trainer parameters from args. In particular, we want to search args
@@ -522,7 +521,6 @@ class SamplingMultiTaskTrainer:
                 loss.backward()
                 assert_for_log(not torch.isnan(loss).any(), "NaNs in loss.")
                 tr_loss += loss.data.cpu().numpy()
-
                 # Gradient regularization and application
                 if self._grad_norm:
                     clip_grad_norm_(self._model.parameters(), self._grad_norm)
@@ -693,14 +691,15 @@ class SamplingMultiTaskTrainer:
                 max_data_points = task.n_val_examples
             val_generator = BasicIterator(
                 batch_size, instances_per_epoch=max_data_points)(
-                task.val_data, num_epochs=1, shuffle=False)
+                task.val_data, num_epochs=1, shuffle=True)
             val_generator = move_to_device(val_generator, self._cuda_device)
             n_val_batches = math.ceil(max_data_points / batch_size)
             all_val_metrics["%s_loss" % task.name] = 0.0
 
             for batch in val_generator:
                 batch_num += 1
-                out = self._forward(batch, task=task, for_training=False)
+                tensor_batch = move_to_device(batch, self._cuda_device)
+                out = self._model.forward(task, tensor_batch, predict=True)
                 loss = out["loss"]
                 all_val_metrics["%s_loss" %
                                 task.name] += loss.data.cpu().numpy()

@@ -15,7 +15,7 @@ from allennlp.nn.util import move_to_device, device_mapping
 
 from typing import Dict, Iterable, List
 
-
+import logging as log
 class SpanClassifierModule(nn.Module):
     ''' Build edge classifier components as a sub-module.
 from typing import Dict, Iterable, List
@@ -367,6 +367,9 @@ class TwoSpanClassifierModule(nn.Module):
                                             task)
 
         if predict:
+            log.info(batch)
+            log.info(logits)
+            log.info(batch['labels'])
             # Return preds as a list.
             preds = self.get_predictions(logits)
             out['preds'] = list(self.unbind_predictions(preds, span_mask))
@@ -569,6 +572,7 @@ class ThreeSpanClassifierModule(TwoSpanClassifierModule):
 
         if predict:
             # Return preds as a list.
+            log.info(logits)
             preds = self.get_predictions(logits)
             out['preds'] = list(self.unbind_predictions(preds, span_mask))
 
