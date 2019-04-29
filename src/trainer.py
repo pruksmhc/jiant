@@ -66,11 +66,13 @@ def build_trainer(
     train_type="SamplingMultiTaskTrainer",
     phase="pretrain"):
     '''Build a trainer from params.
+
     Parameters
     ----------
     params: Trainer parameters as built by build_trainer_params.
     model: A module with trainable parameters.
     run_dir: The directory where we save the models.
+
     Returns
     -------
     A trainer object, a trainer config object, an optimizer config object,
@@ -145,6 +147,7 @@ class SamplingMultiTaskTrainer:
         """
         The training coordinator. Unusually complicated to handle MTL with tasks of
         diverse sizes.
+
         Parameters
         ----------
         model : ``Model``, required.
@@ -247,6 +250,7 @@ class SamplingMultiTaskTrainer:
             phase):
         ''' Set up the trainer by initializing task_infos and metric_infos, which
         track necessary information about the training status of each task and metric respectively.
+
         Returns:
             - task_infos (Dict[str:Dict[str:???]]): dictionary containing where each task_info contains:
                 - iterator: a task specific (because it uses that task's fields to dynamically batch) batcher
@@ -259,6 +263,7 @@ class SamplingMultiTaskTrainer:
                 - scheduler: a task specific scheduler, not used if the global optimizer is not None
                 - stopped: a bool indicating if that task is stopped or not (if it ran out of patience or hit min lr)
                 - last_log: the time we last logged progress for the task
+
             - metric_infos (Dict[str:Dict[str:???]]): dictionary containing metric information.
                 Each metric should be the validation metric of a task, except {micro/macro}_avg,
                 which are privileged to get an aggregate multi-task score. Each dict contains:
@@ -416,8 +421,9 @@ class SamplingMultiTaskTrainer:
         """
         The main training loop.
         Training will stop if we run out of patience or hit the minimum learning rate.
+
         Parameters
-        ----------=
+        ----------
         tasks: a list of task objects to train on
         stop_metric: str, metric to use for early stopping
         batch_size: int, batch size to use for the tasks
@@ -532,7 +538,7 @@ class SamplingMultiTaskTrainer:
                 total_batches_trained += 1
                 optimizer.zero_grad()
                 output_dict = self._forward(
-                    batch, task=task)
+                    batch, task=task, cuda_device=self._cuda_device)
                 assert_for_log(
                     "loss" in output_dict,
                     "Model must return a dict containing a 'loss' key")
@@ -764,7 +770,7 @@ class SamplingMultiTaskTrainer:
 
         for batch in val_generator:
             batch_num += 1
-            out = self._forward(batch, task=task)
+            out = self._forward(batch, task=task, cuda_device=self._cuda_device)
             loss = out["loss"]
             all_val_metrics["%s_loss" % task.name] += loss.data.cpu().numpy()
             n_examples += out["n_exs"]
@@ -775,12 +781,7 @@ class SamplingMultiTaskTrainer:
                 task_metrics["%s_loss" % task.name] = \
                     all_val_metrics["%s_loss" % task.name] / batch_num
                 description = self._description_from_metrics(task_metrics)
-                log.info(
-                    "Evaluate: task %s, batch %d (%d): %s",
-                    task.name,
-                    batch_num,
-                    n_val_batches,
-                    description)
+                log.info("Batch %d/%d: %s , for evaluation data", batch_num, n_val_batches, description)
                 task_info['last_log'] = time.time()
         assert batch_num == n_val_batches
 
@@ -945,16 +946,16 @@ class SamplingMultiTaskTrainer:
 
         return should_stop
 
-    def _forward(self, batch, task=None):
+    def _forward(self, batch, cuda_device, task=None):
         tensor_batch = move_to_device(batch, self._cuda_device)
-        model_out = self._model.forward(task, tensor_batch)
+        model_out = self._model.forward(task, tensor_batch, cuda_device)
         return model_out
 
     def _description_from_metrics(self, metrics):
         # pylint: disable=no-self-use
         ''' format some metrics as a string '''
         return ', '.join(["%s: %.4f" % (name, value)
-                          for name, value in metrics.items()])
+                          for name, value in metrics.items()]) + " ||"
 
     def _unmark_previous_best(self, phase, epoch):
         marked_best = glob.glob(
@@ -1079,6 +1080,7 @@ class SamplingMultiTaskTrainer:
             self, search_phases_in_priority_order=['main']):
         """
         Search for checkpoints to load, looking only for `main` training checkpoints.
+
         TODO: This is probably hairier than it needs to be. If you're good at string handling...
         """
         if not self._serialization_dir:
@@ -1109,6 +1111,7 @@ class SamplingMultiTaskTrainer:
         if you wish to load a model for inference/load parts of a model into a new
         computation graph, you should use the native Pytorch functions:
         `` model.load_state_dict(torch.load("/path/to/model/weights.th"))``
+
         Returns
         -------
         epoch

@@ -47,21 +47,6 @@ def wrap_singleton_string(item: Union[Sequence, str]):
         return [item]
     return item
 
-def get_tag_list(tag_vocab):
-    '''
-    retrieve tag strings from the tag vocab object
-    Args:t
-        tag_vocab: the vocab that contains all tags 
-    Returns:
-        tag_list: a list of "coarse__fine" tag strings
-    '''
-    # get dictionary from allennlp vocab, neglecting @@unknown@@ and @@padding@@
-    tid2tag_dict = {key-2: tag \
-        for key, tag in tag_vocab.get_index_to_token_vocabulary().items() \
-            if key - 2 >= 0}
-    tag_list = [tid2tag_dict[tid].replace(':', '_').replace(', ', '_').replace(' ', '_').replace('+', '_') for tid in range(len(tid2tag_dict))]
-    return tag_list
-
 
 def load_model_state(model, state_path, gpu_id,
                      skip_task_models=[], strict=True):
@@ -202,7 +187,18 @@ def split_data(data, ratio, shuffle=1):
         splits[0].append(col[:split_pt])
         splits[1].append(col[split_pt:])
     return tuple(splits[0]), tuple(splits[1])
-
+    
+def unbind_predictions(self, preds: torch.Tensor) -> Iterable[np.ndarray]:
+    """ 
+    Unpack preds to varying-length numpy arrays.
+    Args:
+        preds: [batch_size, num_targets, ...]
+    Yields:
+        np.ndarray for each row of preds
+    """
+    preds = preds.detach().cpu()
+    for pred in torch.unbind(preds, dim=0):
+        yield pred.numpy()
 
 @Seq2SeqEncoder.register("masked_multi_head_self_attention")
 class MaskedMultiHeadSelfAttention(Seq2SeqEncoder):

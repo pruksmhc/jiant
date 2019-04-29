@@ -1625,15 +1625,18 @@ class CCGTaggingTask(TaggingTask):
 # Span-related tasks
 ########
 
-class SpanTask(Task):
-    ''' Generic class for span tasks.
+class SpanClassificationTask(Task):
+    '''
+     Generic class for span tasks.
     Acts as a classifier, but with multiple targets for each input text.
     Targets are of the form (span1, span2,..., span_n, label), where the spans are
     half-open token intervals [i, j).
+    The number of spans is constant across examples.
     '''
     @property
     def _tokenizer_suffix(self):
-        ''' Suffix to make sure we use the correct source files,
+        ''' 
+        Suffix to make sure we use the correct source files,
         based on the given tokenizer.
         '''
         if self.tokenizer_name:
@@ -1652,23 +1655,21 @@ class SpanTask(Task):
                  label_file: str = None,
                  files_by_split: Dict[str, str] = None,
                  num_spans: int = 2,
-                 is_symmetric: bool = False,
-                 single_sided: bool = False, **kw):
-        """Construct a span task.
-        path, max_seq_len, and name are passed by the code in preprocess.py;
-        remaining arguments should be provided by a subclass constructor or via
+                 **kw):
+        """
+        Construct a span task.
         @register_task.
-        Args:
+
+        Parameters
+        ---------------------
             path: data directory
             max_seq_len: maximum sequence length (currently ignored)
             name: task name
             label_file: relative path to labels file
+                - should be a line-delimited file where each line is a value the 
+                label can take.
             files_by_split: split name ('train', 'val', 'test') mapped to
                 relative filenames (e.g. 'train': 'train.json')
-            is_symmetric: if true, span1 and span2 are assumed to be the same
-                type and share parameters. Otherwise, we learn a separate
-                projection layer and attention weight for each.
-            single_sided: if true, only use span1.
         """
         super().__init__(name, **kw)
 
@@ -1681,30 +1682,27 @@ class SpanTask(Task):
         self.num_spans = num_spans
         self._iters_by_split = self.load_data()
         self.max_seq_len = max_seq_len
-        self.is_symmetric = is_symmetric
-        self.single_sided = single_sided
 
         label_file = os.path.join(path, label_file)
         self.all_labels = list(utils.load_lines(label_file))
         self.n_classes = len(self.all_labels)
-        # see add_task_label_namespace in preprocess.py
         self._label_namespace = self.name + "_labels"
 
-        # Scorers
-        #  self.acc_scorer = CategoricalAccuracy()  # multiclass accuracy
-        self.mcc_scorer = FastMatthews()
         self.acc_scorer = BooleanAccuracy()  # binary accuracy
         self.f1_scorer = F1Measure(positive_label=1)  # binary F1 overall
-        self.val_metric = "%s_f1" % self.name  # TODO: switch to MCC?
+        self.scorers = [self.acc_scorer, self.f1_scorer]
+        self.val_metric = "%s_f1" % self.name
         self.val_metric_decreases = False
 
     def _stream_records(self, filename):
+        """
+        Helper function for loading the data, which is in json format and 
+        checks if it has targets.
+        """
         skip_ctr = 0
         total_ctr = 0
         for record in utils.load_json_data(filename):
             total_ctr += 1
-            # Skip records with empty targets.
-            # TODO(ian): don't do this if generating negatives!
             if not record.get('targets', None):
                 skip_ctr += 1
                 continue
@@ -1713,50 +1711,30 @@ class SpanTask(Task):
                  total_ctr - skip_ctr, skip_ctr, total_ctr,
                  filename)
 
-    @staticmethod
-    def merge_preds(record: Dict, preds: Dict) -> Dict:
-        """ Merge predictions into record, in-place.
-        List-valued predictions should align to targets,
-        and are attached to the corresponding target entry.
-        Non-list predictions are attached to the top-level record.
-        """
-        record['preds'] = {}
-        for target in record['targets']:
-            target['preds'] = {}
-        for key, val in preds.items():
-            if isinstance(val, list):
-                assert len(val) == len(record['targets'])
-                for i, target in enumerate(record['targets']):
-                    target['preds'][key] = val[i]
-            else:
-                # non-list predictions, attach to top-level preds
-                record['preds'][key] = val
-        return record
-
     def load_data(self):
         iters_by_split = collections.OrderedDict()
         for split, filename in self._files_by_split.items():
-            #  # Lazy-load using RepeatableIterator.
-            #  loader = functools.partial(utils.load_json_data,
-            #                             filename=filename)
-            #  iter = serialize.RepeatableIterator(loader)
             iter = list(self._stream_records(filename))
             iters_by_split[split] = iter
         return iters_by_split
 
     def get_split_text(self, split: str):
-        ''' Get split text as iterable of records.
+        ''' 
+        Get split text as iterable of records.
         Split should be one of 'train', 'val', or 'test'.
         '''
         return self._iters_by_split[split]
 
     def get_num_examples(self, split_text):
-        ''' Return number of examples in the result of get_split_text.
+        ''' 
+        Return number of examples in the result of get_split_text.
         Subclass can override this if data is not stored in column format.
         '''
         return len(split_text)
 
     def _make_span_field(self, s, text_field, offset=1):
+        # AllenNLP span extractor expects inclusive span indices
+        # so minus 1 at the end index.
         return SpanField(s[0] + offset, s[1] - 1 + offset, text_field)
 
     def _pad_tokens(self, tokens):
@@ -1770,27 +1748,26 @@ class SpanTask(Task):
 
     def make_instance(self, record, idx, indexers) -> Type[Instance]:
         """Convert a single record to an AllenNLP Instance."""
-        tokens = record['text'].split()  # already space-tokenized by Moses
+        tokens = record['text'].split()
         tokens = self._pad_tokens(tokens)
         text_field = sentence_to_text_field(tokens, indexers)
 
-        d = {}
-        d["idx"] = MetadataField(idx)
+        example = {}
+        example["idx"] = MetadataField(idx)
 
-        d['input1'] = text_field
+        example['input1'] = text_field
 
         for i in range(self.num_spans):
-            d["span"+str(i)+"s"] = ListField([self._make_span_field(t['span'+str(i)], text_field, 1)
-                                 for t in record['targets']])
+            example["span" + str(i + 1) + "s"] = ListField([self._make_span_field(t['span' + str(i + 1)], text_field, 1)
+                                                  for t in record['targets']])
 
-        # Always use multilabel targets, so be sure each label is a list.
         labels = [utils.wrap_singleton_string(t['label'])
                   for t in record['targets']]
-        d['labels'] = ListField([MultiLabelField(label_set,
+        example['labels'] = ListField([MultiLabelField(label_set,
                                                  label_namespace=self._label_namespace,
                                                  skip_indexing=False)
                                  for label_set in labels])
-        return Instance(d)
+        return Instance(example)
 
     def process_split(self, records, indexers) -> Iterable[Type[Instance]]:
         ''' Process split text into a list of AllenNLP Instances. '''
@@ -1812,7 +1789,6 @@ class SpanTask(Task):
     def get_metrics(self, reset=False):
         '''Get metrics specific to the task'''
         metrics = {}
-        metrics['mcc'] = self.mcc_scorer.get_metric(reset)
         metrics['acc'] = self.acc_scorer.get_metric(reset)
         precision, recall, f1 = self.f1_scorer.get_metric(reset)
         metrics['precision'] = precision
@@ -1820,22 +1796,59 @@ class SpanTask(Task):
         metrics['f1'] = f1
         return metrics
 
+@register_task('winograd-coreference', rel_path = 'winograd-coref')
+class WinogradCoreferenceTask(SpanClassificationTask):
+    def __init__(self, path, single_sided=False, **kw):
+        self._files_by_split = {'train': "train_after_redistribution.tsv.json", 'val': "val_same_distribution_test.tsv.json",'test': "test_final_new.tsv.json"}
+        self.num_spans = 2
+        super().__init__(files_by_split=self._files_by_split, label_file="labels.txt", path=path, single_sided=single_sided, **kw)
+        self.val_metric = "%s_acc" % self.name 
+
+    def update_metrics(self, logits, labels, tagmask=None):
+        logits, labels = logits.detach(), labels.detach()
+        def one_hot_v(batch, depth=2):
+            ones = torch.sparse.torch.eye(depth).cuda()
+            return ones.index_select(0, batch)
+        binary_preds = one_hot_v(logits, depth=2)
+        label_ints = torch.argmax(labels, dim=1)
+        self.f1_scorer(binary_preds, label_ints)
+        self.acc_scorer(binary_preds.long(), labels.long())
+
+    def get_metrics(self, reset=False):
+        '''Get metrics specific to the task'''
+        collected_metrics = {"f1": self.f1_scorer.get_metric(reset)[2], "acc": self.acc_scorer.get_metric(reset)}
+        return collected_metrics
+
+    def _stream_records(self, filename):
+        skip_ctr = 0
+        total_ctr = 0
+        for records in utils.load_json_data(filename):
+            total_ctr += 1
+            # Skip records with empty targets.
+            # TODO(ian): don't do this if generating negatives!
+            if not records.get('targets', None):
+                skip_ctr += 1
+                continue
+            yield records
+        log.info("Read=%d, Skip=%d, Total=%d from %s",
+                 total_ctr - skip_ctr, skip_ctr, total_ctr,
+                 filename)
+
 @register_task('gap-coreference', rel_path = 'gap-coreference')
-class GapCoreferenceTask(SpanTask):
+class GapCoreferenceTask(SpanClassificationTask):
     def __init__(self, path: str, max_seq_len: int,
                  name: str,
                  label_file: str = None,
                  files_by_split: Dict[str, str] = None,
-                 is_symmetric: bool = False,
                  domains=["FEMININE", "MASCULINE"],
-                 single_sided: bool = False, **kw):
+                 **kw):
         self._files_by_split = {'train': "gap-development.json", 'val': "gap-test.json",'test': "blind_test_gap.json"}
         self.num_domains = len(domains)
         self.domains = domains
         self._domain_namespace = name + "_tags"
         label_file = "labels.txt"
         self.num_spans = 3
-        super().__init__(path, max_seq_len, name, label_file, self._files_by_split, self.num_spans, is_symmetric, single_sided, **kw)
+        super().__init__(path, max_seq_len, name, label_file, self._files_by_split, self.num_spans, **kw)
         # Scorers
         self.f1_scorer = gap_scorer.GAPScorer()
         self.val_metric = "%s_f1" % self.name
