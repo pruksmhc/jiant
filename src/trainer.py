@@ -310,6 +310,7 @@ class SamplingMultiTaskTrainer:
             if self._max_epochs > 0 and "t_total" in optimizer_params:
                 # If we know in advance how many opt steps for the transformer
                 # there are, set it.
+                import pdb; pdb.set_trace()
                 opt_params['t_total'] = task_info["n_tr_batches"] * \
                     self._max_epochs
             task_info['optimizer'] = Optimizer.from_params(
@@ -539,8 +540,7 @@ class SamplingMultiTaskTrainer:
                 n_batches_since_val += 1
                 total_batches_trained += 1
                 optimizer.zero_grad()
-                output_dict = self._forward(
-                    batch, task=task, cuda_device=self._cuda_device)
+                output_dict = self._forward(batch, task=task, predict=True)
                 assert_for_log(
                     "loss" in output_dict,
                     "Model must return a dict containing a 'loss' key")
@@ -774,7 +774,7 @@ class SamplingMultiTaskTrainer:
 
         for batch in val_generator:
             batch_num += 1
-            out = self._forward(batch, task=task, cuda_device=self._cuda_device)
+            out = self._forward(batch, task=task)
             loss = out["loss"]
             all_val_metrics["%s_loss" % task.name] += loss.data.cpu().numpy()
             n_examples += out["n_exs"]
@@ -948,9 +948,9 @@ class SamplingMultiTaskTrainer:
 
         return should_stop
 
-    def _forward(self, batch, cuda_device, task=None):
-        tensor_batch = move_to_device(batch, self._cuda_device)
-        model_out = self._model.forward(task, tensor_batch, cuda_device)
+    def _forward(self, batch, task=None):
+        tensor_batch = move_to_device(batch)
+        model_out = self._model.forward(task, tensor_batch)
         return model_out
 
     def _description_from_metrics(self, metrics):
@@ -1079,12 +1079,13 @@ class SamplingMultiTaskTrainer:
             self._delete_old_checkpoints(phase, epoch)
 
     def _find_last_checkpoint_suffix(
-            self, search_phases_in_priority_order=['main']):
+            self, search_phases_in_priority_order=['pretrain']):
         """
         Search for checkpoints to load, looking only for `main` training checkpoints.
 
         TODO: This is probably hairier than it needs to be. If you're good at string handling...
         """
+        import pdb; pdb.set_trace()
         if not self._serialization_dir:
             raise ConfigurationError(
                 "serialization_dir not specified - cannot "
@@ -1105,7 +1106,7 @@ class SamplingMultiTaskTrainer:
                     to_return = x
             return to_return.split("model_state_")[-1]
 
-    def _restore_checkpoint(self, search_phases_in_priority_order=['main']):
+    def _restore_checkpoint(self, search_phases_in_priority_order=['pretrain']):
         """
         Restores a model from a serialization_dir to the last saved checkpoint.
         This includes an epoch count and optimizer state, which is serialized separately
@@ -1129,7 +1130,7 @@ class SamplingMultiTaskTrainer:
                                   "model_state_{}".format(suffix_to_load))
         training_state_path = os.path.join(
             self._serialization_dir,
-            "training_state_{}".format(suffix_to_load))
+            "pretraining_state_{}".format(suffix_to_load))
         task_state_path = os.path.join(self._serialization_dir,
                                        "task_state_{}".format(suffix_to_load))
         metric_state_path = os.path.join(

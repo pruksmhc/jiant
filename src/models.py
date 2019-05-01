@@ -704,7 +704,7 @@ class MultiTaskModel(nn.Module):
         self.use_bert = bool(args.bert_model_name)
         self.sep_embs_for_skip = args.sep_embs_for_skip
 
-    def forward(self, task, batch, cuda_device, predict=False):
+    def forward(self, task, batch, predict=False):
         '''
         Pass inputs to correct forward pass
         Args:

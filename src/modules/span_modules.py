@@ -120,7 +120,7 @@ class SpanClassifierModule(nn.Module):
         for i in range(self.num_spans):
             se_proj = self.projs[i](sent_embs_t).transpose(2, 1).contiguous()
             se_projs.append(se_proj)
-
+        se_projs = torch.stack(se_projs)
         span_embs = torch.Tensor([]).cuda() \
             if torch.cuda.is_available() else torch.Tensor([])
         out['n_exs'] = batch_size
@@ -147,7 +147,9 @@ class SpanClassifierModule(nn.Module):
 
         if predict:
             # Return preds as a list.
+            print(logits)
             preds = self.get_predictions(logits)
+            print(preds)
             out['preds'] = list(unbind_predictions(preds))
         return out
 
