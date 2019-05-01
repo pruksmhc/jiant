@@ -12,7 +12,6 @@ from .import modules
 
 from allennlp.modules.span_extractors import \
     EndpointSpanExtractor, SelfAttentiveSpanExtractor
-from allennlp.nn.util import move_to_device, device_mapping
 
 from typing import Dict, Iterable, List
 
@@ -85,18 +84,17 @@ class SpanClassifierModule(nn.Module):
                 sent_embs: torch.Tensor,
                 sent_mask: torch.Tensor,
                 task: Task,
-                cuda_device: int,
                 predict: bool) -> Dict:
-        """ 
+        """
         Run forward pass.
         Expects batch to have the following entries:
             'input' : [batch_size, max_len, emb_size]
             'labels' : [batch_size, num_targets] of label indices
             'span1s' : [batch_size, 1, 2], span indices
-            'span2s' : [batch_size, 1, 2], span indices 
-                . 
-                . 
-                . 
+            'span2s' : [batch_size, 1, 2], span indices
+                .
+                .
+                .
             'span_ts': [batch_size, 1, 2], span indices
 
         Parameters
@@ -107,17 +105,17 @@ class SpanClassifierModule(nn.Module):
             task: Task
             predict: whether or not to generate predictions
         This learns different span pooling operators for each span.
-        
+
         Returns
         -------------------------------
             out: dict(str -> Tensor)
         """
         out = {}
         batch_size = sent_embs.shape[0]
-        out["n_inputs"] = batch_size
-        # Apply projection CNN layer for each span of the input sentence 
-        sent_embs_t = sent_embs.transpose(1, 2)
-        sent_embs_t = move_to_device(sent_embs_t, cuda_device)
+        out['n_inputs'] = batch_size
+
+        # Apply projection CNN layer for each span of the input sentence
+        sent_embs_t = sent_embs.transpose(1, 2)  # needed for CNN layer
         se_projs = []
         for i in range(self.num_spans):
             se_proj = self.projs[i](sent_embs_t).transpose(2, 1).contiguous()
@@ -125,39 +123,39 @@ class SpanClassifierModule(nn.Module):
 
         span_embs = torch.Tensor([]).cuda() \
             if torch.cuda.is_available() else torch.Tensor([])
-        out["n_exs"] = batch_size
+        out['n_exs'] = batch_size
         _kw = dict(sequence_mask=sent_mask.long())
         for i in range(self.num_spans):
             # spans are [batch_size, num_targets, span_modules]
-            span_emb = self.span_extractors[i](se_projs[i], batch["span" + str(i + 1) + "s"], **_kw)
+            span_emb = self.span_extractors[i](se_projs[i], batch['span' + str(i + 1) + 's'], **_kw)
             span_embs = torch.cat([span_embs, span_emb], dim=2)
 
         # [batch_size, num_targets, n_classes]
         logits = self.classifier(span_embs)
-        out["logits"] = logits
+
+        out['logits'] = logits
 
         # Compute loss if requested.
-        if "labels" in batch:
+        if 'labels' in batch:
             logits = logits.squeeze(dim=1)
-            out["loss"] = self.compute_loss(logits,
-                                            batch["labels"].squeeze(dim=1),
+            out['loss'] = self.compute_loss(logits,
+                                            batch['labels'].squeeze(dim=1),
                                             task)
             predictions = self.get_predictions(logits)
             tagmask = batch.get("tagmask", None)
-            task.update_metrics(predictions,  batch["labels"].squeeze(dim=1), tagmask=tagmask)
+            task.update_metrics(predictions, batch["labels"].squeeze(dim=1), tagmask=tagmask)
 
         if predict:
             # Return preds as a list.
             preds = self.get_predictions(logits)
-            out["preds"] = list(unbind_predictions(preds))
+            out['preds'] = list(unbind_predictions(preds))
         return out
-
 
     def get_predictions(self, logits: torch.Tensor):
         """
         Return class probabilities, same shape as logits.
 
-        Parameters 
+        Parameters
         -------------------------------
             logits: [batch_size, num_targets, n_classes]
 
@@ -165,7 +163,7 @@ class SpanClassifierModule(nn.Module):
         -------------------------------
             probs: [batch_size, num_targets, n_classes]
         """
-        if self.loss_type == "sigmoid":
+        if self.loss_type == 'sigmoid':
             return torch.sigmoid(logits)
         elif self.loss_type == "softmax":
             logits = logits.squeeze(dim=1)
@@ -180,7 +178,7 @@ class SpanClassifierModule(nn.Module):
                      labels: torch.Tensor, task):
         """ 
         Paramters 
-        -------------------------------
+
             logits: [total_num_targets, n_classes] Tensor of float scores
             labels: [total_num_targets, n_classes] Tensor of sparse binary targets
 
@@ -188,6 +186,7 @@ class SpanClassifierModule(nn.Module):
          -------------------------------
             loss: scalar Tensor
         """
+
         if self.loss_type == "sigmoid":
             return F.binary_cross_entropy(torch.sigmoid(logits),
                                           labels.float())
@@ -197,3 +196,4 @@ class SpanClassifierModule(nn.Module):
         else:
             raise ValueError("Unsupported loss type '%s' "
                              "for span classification." % self.loss_type)
+

@@ -73,9 +73,18 @@ def build_sent_encoder(args, vocab, d_emb, tasks, embedder, cove_layer):
     rnn_params = Params({'input_size': d_emb, 'bidirectional': True,
                          'hidden_size': args.d_hid, 'num_layers': args.n_layers_enc})
     if args.sent_enc == "onlstm":
-        onlayer = ONLSTMPhraseLayer(vocab, args.d_word, args.d_hid, args.n_layers_enc, args.chunk_size,
-                                    args.onlstm_dropconnect, args.onlstm_dropouti, args.dropout,
-                                    args.onlstm_dropouth, embedder, args.batch_size)
+        onlayer = ONLSTMPhraseLayer(
+            vocab,
+            args.d_word,
+            args.d_hid,
+            args.n_layers_enc,
+            args.chunk_size,
+            args.onlstm_dropconnect,
+            args.onlstm_dropouti,
+            args.dropout,
+            args.onlstm_dropouth,
+            embedder,
+            args.batch_size)
         # The 'onlayer' acts as a phrase layer module for the larger SentenceEncoder module.
         sent_encoder = SentenceEncoder(vocab, embedder, args.n_layers_highway,
                                        onlayer.onlayer, skip_embs=args.skip_embs,
@@ -85,15 +94,26 @@ def build_sent_encoder(args, vocab, d_emb, tasks, embedder, cove_layer):
         d_sent = args.d_word
         log.info("Using ON-LSTM sentence encoder!")
     elif args.sent_enc == "prpn":
-        prpnlayer = PRPNPhraseLayer(vocab, args.d_word, args.d_hid, args.n_layers_enc, args.n_slots,
-                         args.n_lookback, args.resolution, args.dropout, args.idropout, args.rdropout,
-                         args.res, embedder,  args.batch_size)
+        prpnlayer = PRPNPhraseLayer(
+            vocab,
+            args.d_word,
+            args.d_hid,
+            args.n_layers_enc,
+            args.n_slots,
+            args.n_lookback,
+            args.resolution,
+            args.dropout,
+            args.idropout,
+            args.rdropout,
+            args.res,
+            embedder,
+            args.batch_size)
         # The 'prpn' acts as a phrase layer module for the larger SentenceEncoder module.
         sent_encoder = SentenceEncoder(vocab, embedder, args.n_layers_highway,
-                                    prpnlayer.prpnlayer, skip_embs=args.skip_embs,
-                                    dropout=args.dropout,
-                                    sep_embs_for_skip=args.sep_embs_for_skip,
-                                    cove_layer=cove_layer)
+                                       prpnlayer.prpnlayer, skip_embs=args.skip_embs,
+                                       dropout=args.dropout,
+                                       sep_embs_for_skip=args.sep_embs_for_skip,
+                                       cove_layer=cove_layer)
         d_sent = args.d_word
         log.info("Using PRPN sentence encoder!")
     elif any(isinstance(task, LanguageModelingTask) for task in tasks) or \
@@ -612,18 +632,18 @@ def build_pair_sentence_module(task, d_inp, model, params):
         d_out = params["d_hid_attn"] * 2
     else:
         pool_type = "first" if model.use_bert else "max"
-        pooler = Pooler(project=not model.use_bert, d_inp=d_inp, d_proj=params["d_proj"], pool_type=pool_type)
+        pooler = Pooler(project=not model.use_bert, d_inp=d_inp,
+                        d_proj=params["d_proj"], pool_type=pool_type)
         d_out = d_inp if model.use_bert else params["d_proj"]
 
-
     # Build an attention module if necessary
-    if params["shared_pair_attn"] and params["attn"] and not model.use_bert: # shared attn
+    if params["shared_pair_attn"] and params["attn"] and not model.use_bert:  # shared attn
         if not hasattr(model, "pair_attn"):
             pair_attn = build_pair_attn(d_inp, params["d_hid_attn"])
             model.pair_attn = pair_attn
         else:
             pair_attn = model.pair_attn
-    elif params["attn"] and not model.use_bert: # non-shared attn
+    elif params["attn"] and not model.use_bert:  # non-shared attn
         pair_attn = build_pair_attn(d_inp, params["d_hid_attn"])
     else:  # no attn
         pair_attn = None
@@ -721,16 +741,17 @@ class MultiTaskModel(nn.Module):
                 out = self._pair_sentence_forward(batch, task, predict)
         elif isinstance(task, LanguageModelingTask):
             if isinstance(self.sent_encoder._phrase_layer, ONLSTMStack) or \
-                isinstance(self.sent_encoder._phrase_layer, PRPN):
+                    isinstance(self.sent_encoder._phrase_layer, PRPN):
                 out = self._lm_only_lr_forward(batch, task)
             else:
                 out = self._lm_forward(batch, task, predict)
         elif isinstance(task, TaggingTask):
             out = self._tagger_forward(batch, task, predict)
         elif isinstance(task, EdgeProbingTask):
-            sent_embs, sent_mask = self.sent_encoder(batch['input1'], task)
+            # Just get embeddings and invoke task module.
+            word_embs_in_context, sent_mask = self.sent_encoder(batch['input1'], task)
             module = getattr(self, "%s_mdl" % task.name)
-            out = module.forward(batch, sent_embs, sent_mask,
+            out = module.forward(batch, word_embs_in_context, sent_mask,
                                  task, predict)
         elif isinstance(task, SequenceGenerationTask):
             out = self._seq_gen_forward(batch, task, predict)
@@ -739,7 +760,7 @@ class MultiTaskModel(nn.Module):
         elif isinstance(task, RankingTask):
             out = self._ranking_forward(batch, task, predict)
         elif isinstance(task, SpanClassificationTask):
-            out = self._span_forward(batch, task, cuda_device, predict)
+            out = self._span_forward(batch, task, predict)
         else:
             raise ValueError("Task-specific components not found!")
         return out
@@ -761,10 +782,10 @@ class MultiTaskModel(nn.Module):
         out = {}
 
         # embed the sentence
-        sent_embs, sent_mask = self.sent_encoder(batch['input1'], task)
+        word_embs_in_context, sent_mask = self.sent_encoder(batch['input1'], task)
         # pass to a task specific classifier
         classifier = self._get_classifier(task)
-        logits = classifier(sent_embs, sent_mask)
+        logits = classifier(word_embs_in_context, sent_mask)
         out['logits'] = logits
         out['n_exs'] = get_batch_size(batch)
 
@@ -822,11 +843,11 @@ class MultiTaskModel(nn.Module):
             out['preds'] = predicted
         return out
 
-    def _span_forward(self, batch, task, cuda_device, predict):
+    def _span_forward(self, batch, task, predict):
         sent_embs, sent_mask = self.sent_encoder(batch['input1'], task)
         module = getattr(self, "%s_mdl" % task.name)
         out = module.forward(batch, sent_embs, sent_mask, 
-                             task, cuda_device, predict)
+                             task, predict)
         return out 
 
     def _positive_pair_sentence_forward(self, batch, task, predict):
@@ -906,7 +927,8 @@ class MultiTaskModel(nn.Module):
                 logits = logits.squeeze(-1) if len(logits.size()
                                                    ) > 1 else logits
                 out['loss'] = F.mse_loss(logits, labels)
-                task.update_metrics(logits.data.cpu().numpy(), labels.data.cpu().numpy(), tagmask=tagmask)
+                task.update_metrics(logits.data.cpu().numpy(),
+                                    labels.data.cpu().numpy(), tagmask=tagmask)
             else:
                 out['loss'] = F.cross_entropy(logits, labels)
                 task.update_metrics(logits, labels, tagmask=tagmask)
@@ -998,7 +1020,7 @@ class MultiTaskModel(nn.Module):
         '''
         This function is for sequence tagging (one-to-one mapping between words and tags).
         Args:
-                batch: a dict of inputs and target tags 
+                batch: a dict of inputs and target tags
                 task: TaggingTask
                 predict: (boolean) predict mode (not supported)
         Returns
@@ -1107,7 +1129,8 @@ class MultiTaskModel(nn.Module):
         b_size, seq_len = batch['targs']['words'].size()
         # pad_idx is the token used to pad till max_seq_len
         n_pad = batch['targs']['words'].eq(pad_idx).sum().item()
-        # No of examples: only left to right, every unit in the sequence length is a training example only once.
+        # No of examples: only left to right, every unit in the sequence length is
+        # a training example only once.
         out['n_exs'] = (b_size * seq_len - n_pad)
         sent, mask = self.sent_encoder(batch['input'], task)
         sent = sent.masked_fill(1 - mask.byte(), 0)

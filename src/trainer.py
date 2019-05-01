@@ -49,7 +49,7 @@ def build_trainer_params(args, task_names, phase='pretrain'):
             else:
                 params[attr] = args.target_train_data_fraction
         else:
-             params[attr] = getattr(args, attr)
+            params[attr] = getattr(args, attr)
     params['max_vals'] = _get_task_attr('max_vals')
     params['val_interval'] = _get_task_attr('val_interval')
     params['dec_val_scale'] = _get_task_attr('dec_val_scale')
@@ -58,13 +58,13 @@ def build_trainer_params(args, task_names, phase='pretrain'):
 
 
 def build_trainer(
-    args,
-    task_names,
-    model,
-    run_dir,
-    metric_should_decrease=True,
-    train_type="SamplingMultiTaskTrainer",
-    phase="pretrain"):
+        args,
+        task_names,
+        model,
+        run_dir,
+        metric_should_decrease=True,
+        train_type="SamplingMultiTaskTrainer",
+        phase="pretrain"):
     '''Build a trainer from params.
 
     Parameters
@@ -414,7 +414,7 @@ class SamplingMultiTaskTrainer:
         return sample_weights
 
     def train(self, tasks, stop_metric,
-              batch_size, n_batches_per_pass,
+              batch_size,
               weighting_method, scaling_method,
               train_params, optimizer_params, scheduler_params,
               shared_optimizer=1, load_model=1, phase="pretrain"):
@@ -427,7 +427,6 @@ class SamplingMultiTaskTrainer:
         tasks: a list of task objects to train on
         stop_metric: str, metric to use for early stopping
         batch_size: int, batch size to use for the tasks
-        n_batches_per_pass: int, how many training steps per task per pass
         weighting_method: str, how to sample which task to use
         scaling_method:  str, how to scale gradients
         train_params: trainer config object
@@ -497,7 +496,8 @@ class SamplingMultiTaskTrainer:
             [task_infos[task.name]['n_tr_batches'] for task in tasks])
         log.info("Training examples per task: " +
                  str(dict(zip(task_names, task_n_train_examples))))
-        sample_weights = self.get_sampling_weights(weighting_method, len(tasks), task_n_train_examples)
+        sample_weights = self.get_sampling_weights(
+            weighting_method, len(tasks), task_n_train_examples)
 
         normalized_sample_weights = np.array(
             sample_weights) / sum(sample_weights)
@@ -507,7 +507,7 @@ class SamplingMultiTaskTrainer:
             np.array_str(
                 normalized_sample_weights,
                 precision=4))
-        
+
         # Sample the tasks to train on. Do it all at once (val_interval) for
         # MAX EFFICIENCY.
         samples = random.choices(
@@ -515,7 +515,8 @@ class SamplingMultiTaskTrainer:
             weights=sample_weights,
             k=validation_interval)
 
-        scaling_weights = self.get_scaling_weights(scaling_method, len(tasks), task_names, task_n_train_examples)
+        scaling_weights = self.get_scaling_weights(
+            scaling_method, len(tasks), task_names, task_n_train_examples)
         offset = 0
         all_tr_metrics = {}
         log.info("Beginning training. Stopping metric: %s", stop_metric)
@@ -533,7 +534,8 @@ class SamplingMultiTaskTrainer:
             total_batches_trained = task_info['total_batches_trained']
             n_batches_since_val = task_info['n_batches_since_val']
             tr_loss = task_info['loss']
-            for batch in itertools.islice(tr_generator, n_batches_per_pass):
+
+            for batch in itertools.islice(tr_generator, 1):
                 n_batches_since_val += 1
                 total_batches_trained += 1
                 optimizer.zero_grad()
@@ -699,7 +701,8 @@ class SamplingMultiTaskTrainer:
             log.info('%s, %d, %s', metric, best_epoch, all_metrics_str)
         return results
 
-    def _update_metric_history(self, epoch, all_val_metrics, metric, task_name, metric_infos, metric_decreases, should_save, new_best_macro):
+    def _update_metric_history(self, epoch, all_val_metrics, metric, task_name,
+                               metric_infos, metric_decreases, should_save, new_best_macro):
         """
         This function updates metric history with the best validation score so far.
         Parameters
@@ -712,14 +715,14 @@ class SamplingMultiTaskTrainer:
         metric_decreases: bool, marker to show if we should increase or
         decrease validation metric.
         should_save: bool, for checkpointing
-        new_best_macro: bool, indicator of whether the previous best preformance score was exceeded 
+        new_best_macro: bool, indicator of whether the previous best preformance score was exceeded
 
         Returns
         ________
         metric_infos: dict storing information about the various metrics
         this_epoch_metric: dict, metric information for this epoch, used for optimization scheduler
         should_save: bool
-        new_best_macro: bool 
+        new_best_macro: bool
         """
         this_epoch_metric = all_val_metrics[metric]
         metric_history = metric_infos[metric]['hist']
@@ -737,7 +740,8 @@ class SamplingMultiTaskTrainer:
             log.info("Out of patience. Stopped tracking %s", task_name)
         return metric_infos, this_epoch_metric, should_save, new_best_macro
 
-    def _calculate_validation_performance(self, task, task_infos, tasks, batch_size, all_val_metrics, n_examples_overall):
+    def _calculate_validation_performance(
+            self, task, task_infos, tasks, batch_size, all_val_metrics, n_examples_overall):
         """
         This function builds validation generator, evaluates on each task and produces validation metrics.
         Parameters
@@ -794,7 +798,7 @@ class SamplingMultiTaskTrainer:
             all_val_metrics["micro_avg"] += (1 - all_val_metrics[task.val_metric] /
                                              self._dec_val_scale) * n_examples
             all_val_metrics["macro_avg"] += (1 -
-                                         all_val_metrics[task.val_metric] /
+                                             all_val_metrics[task.val_metric] /
                                              self._dec_val_scale)
         else:
             # triggers for single-task cases and during MTL when task val metric increases
@@ -838,11 +842,11 @@ class SamplingMultiTaskTrainer:
         for task in tasks:
             n_examples_overall, task_infos, all_val_metrics = \
                 self._calculate_validation_performance(task,
-                                                 task_infos,
-                                                 tasks,
-                                                 batch_size,
-                                                 all_val_metrics,
-                                                 n_examples_overall)
+                                                       task_infos,
+                                                       tasks,
+                                                       batch_size,
+                                                       all_val_metrics,
+                                                       n_examples_overall)
 
         # Track per task patience
         should_save = periodic_save  # whether to save this epoch or not.
@@ -862,10 +866,8 @@ class SamplingMultiTaskTrainer:
                 task_name = task.name
             if metric_infos[metric]['stopped']:
                 continue
-            metric_infos, this_epoch_metric, should_save, new_best_macro = self._update_metric_history(epoch, \
-                                                                                                    all_val_metrics, 
-                                                                                                    metric, task_name, metric_infos, \
-                                                                                                    metric_decreases, should_save, new_best_macro)
+            metric_infos, this_epoch_metric, should_save, new_best_macro = self._update_metric_history(
+                epoch, all_val_metrics, metric, task_name, metric_infos, metric_decreases, should_save, new_best_macro)
 
             # Get scheduler, using global scheduler if exists and task is macro
             # micro has no scheduler updates
@@ -990,7 +992,7 @@ class SamplingMultiTaskTrainer:
         training_state: An object containing trainer state (step number, etc.), to be saved.
         phase: Usually 'pretrain' or 'target_train'.
         new_best_macro: If true, the saved checkpoint will be marked with .best_macro, and
-            potentially used later when switching from main to eval training.
+            potentially used later when switching from pretraining to target task training.
         """
         if not self._serialization_dir:
             raise ConfigurationError(
