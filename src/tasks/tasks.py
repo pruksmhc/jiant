@@ -2059,6 +2059,7 @@ class SpanClassificationTask(Task):
         skip_ctr = 0
         total_ctr = 0
         for record in utils.load_json_data(filename):
+            import pdb; pdb.set_trace()
             total_ctr += 1
             if not record.get("targets", None):
                 skip_ctr += 1
@@ -2112,9 +2113,10 @@ class SpanClassificationTask(Task):
         example["input1"] = text_field
 
         for i in range(self.num_spans):
-            example["span" + str(i + 1) + "s"] = ListField(
-                [self._make_span_field(record["target"]["span" + str(i + 1)], text_field, 1)]
-            )
+            try:
+                example["span" + str(i + 1) + "s"] = ListField([self._make_span_field(record["target"]["span" + str(i + 1)], text_field, 1)])
+            except:
+                import pdb; pdb.set_trace()
         example["labels"] = ListField(
             [
                 MultiLabelField(
@@ -2157,7 +2159,7 @@ class SpanClassificationTask(Task):
         return metrics
 
 
-@register_task("commitbank", rel_path="CommitmentBank/")
+@register_task("commitbank", rel_path="CB/")
 class CommitmentTask(PairClassificationTask):
     """ NLI-formatted task detecting speaker commitment.
     Data and more info at github.com/mcdm/CommitmentBank/
@@ -2499,7 +2501,7 @@ class SWAGTask(MultipleChoiceTask):
         return {"accuracy": acc}
 
 
-@register_task("winograd-coreference", rel_path="winograd-coref")
+@register_task("winograd-coreference", rel_path="WSC")
 class WinogradCoreferenceTask(SpanClassificationTask):
     def __init__(self, path, **kw):
         self._files_by_split = {"train": "train.jsonl", "val": "val.jsonl", "test": "test.jsonl"}
